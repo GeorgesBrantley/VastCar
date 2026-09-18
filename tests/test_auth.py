@@ -77,6 +77,30 @@ class LocalAuthTests(unittest.TestCase):
         self.auth.set_favorite_racer(second["id"], 7)
         self.assertEqual(self.auth.favorite_counts(), {7: 2})
 
+    def test_amendment_vote_locks_and_pit_entries_cost_coin(self):
+        user = self.auth.register("election_fan", "a secure password")
+        poll = self.auth.vote_final_lap(user["id"], 3, "team-work")
+        self.assertEqual(poll["selected"], "team-work")
+        self.assertEqual(poll["totals"]["team-work"], 1)
+        with self.assertRaisesRegex(AuthError, "already locked"):
+            self.auth.vote_final_lap(user["id"], 3, "explosions")
+
+        purchase = self.auth.buy_pit_crew_ticket(user["id"], 3, "haunting", 7)
+        self.assertEqual(purchase["user"]["coin"], STARTING_COIN - 10)
+        self.auth.buy_pit_crew_ticket(user["id"], 3, "haunting", 7)
+        self.auth.buy_pit_crew_ticket(user["id"], 3, "car-swap", 9, 8)
+        self.assertEqual(self.auth.pit_crew_ticket_count(3, user["id"]), {"total": 3, "mine": 3})
+
+        result = self.auth.finalize_election(3)
+        self.assertEqual(result["amendments"]["team-work"], 1)
+        self.assertEqual(len(result["pit_crew"]), 2)
+        self.assertEqual(self.auth.finalize_election(3), result)
+
+    def test_pit_entry_requires_distinct_drivers_for_a_swap(self):
+        user = self.auth.register("pit_fan", "a secure password")
+        with self.assertRaisesRegex(AuthError, "two different"):
+            self.auth.buy_pit_crew_ticket(user["id"], 2, "soul-swap", 4, 4)
+
     def test_tower_items_stack_save_and_sell_for_sixty_percent(self):
         user = self.auth.register("tower_fan", "a secure password")
         with self.auth.db:

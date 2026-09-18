@@ -29,6 +29,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not url.path.startswith("/api/"):
             return super().do_GET()
         try:
+            self.settle_due_elections()
             params = parse_qs(url.query)
             if url.path == "/api/auth/me":
                 user = self.auth.session_user(self.headers.get("Cookie"))
@@ -53,6 +54,24 @@ class Handler(SimpleHTTPRequestHandler):
                 value = {"tracks": self.league.tracks()}
             elif url.path == "/api/eternals":
                 value = self.league.eternals()
+            elif url.path == "/api/final-lap":
+                value = self.league.final_lap()
+                user = self.auth.session_user(self.headers.get("Cookie"))
+                if value["winner"]:
+                    value["winner"]["fans"] = self.auth.favorite_counts().get(value["winner"]["id"], 0)
+                election = value.get("election")
+                if election:
+                    season = election["season"]
+                    if self.league.clock() >= election["closes_at"]:
+                        result = self.auth.finalize_election(season)
+                        self.league.apply_pit_outcomes(season, result["pit_crew"])
+                    election["amendments"] = self.auth.final_lap_poll(season, user["id"] if user else None)
+                    election["pit_crew"] = self.auth.pit_crew_ticket_count(season, user["id"] if user else None)
+                    election["result"] = self.enrich_election_result(self.auth.final_lap_result(season))
+                    election["drivers"] = [
+                        {key: driver[key] for key in ("id", "name", "number")}
+                        for driver in self.league.roster.values()
+                    ]
             elif url.path.startswith("/api/races/"):
                 value = self.league.race(int(url.path.rsplit("/", 1)[1]))
                 if value is None:
@@ -68,6 +87,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/"):
+            self.settle_due_elections()
         if path == "/auth/logout":
             self.send_response(204)
             self.send_header("Set-Cookie", self.auth.cookie_header("", secure=self.is_secure_request(), max_age=0))
@@ -95,6 +116,45 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": "Choose a valid driver"}, 400)
                 user = self.auth.set_favorite_racer(user["id"], racer_id)
                 self.send_json({"user": user, "favorite_change_available_at": self.auth.favorite_change_available_at(user["id"])})
+            except AuthError as error:
+                self.send_json({"error": str(error)}, 400)
+            except ValueError:
+                self.send_json({"error": "Invalid request"}, 400)
+            return
+        if path in ("/api/final-lap/vote", "/api/final-lap/amendment"):
+            try:
+                user = self.auth.session_user(self.headers.get("Cookie"))
+                if user is None:
+                    return self.send_json({"error": "Log in to cast your vote"}, 401)
+                payload = self.request_json()
+                feature = self.league.final_lap()
+                election = feature.get("election")
+                if not election or election["phase"] != "open" or payload.get("season") != election["season"]:
+                    return self.send_json({"error": "That amendment vote is closed"}, 400)
+                self.send_json({"poll": self.auth.vote_final_lap(user["id"], payload["season"], payload.get("choice"))})
+            except AuthError as error:
+                self.send_json({"error": str(error)}, 400)
+            except ValueError:
+                self.send_json({"error": "Invalid request"}, 400)
+            return
+        if path == "/api/final-lap/pit-crew":
+            try:
+                user = self.auth.session_user(self.headers.get("Cookie"))
+                if user is None:
+                    return self.send_json({"error": "Log in to help the pit crew"}, 401)
+                payload = self.request_json()
+                feature = self.league.final_lap()
+                election = feature.get("election")
+                if not election or election["phase"] != "open" or payload.get("season") != election["season"]:
+                    return self.send_json({"error": "Pit crew entries are closed"}, 400)
+                targets = (payload.get("target_a"), payload.get("target_b"))
+                if any(target is not None and target not in self.league.roster for target in targets):
+                    return self.send_json({"error": "Choose a valid driver"}, 400)
+                purchase = self.auth.buy_pit_crew_ticket(
+                    user["id"], payload["season"], payload.get("action"), *targets
+                )
+                purchase["pit_crew"] = self.auth.pit_crew_ticket_count(payload["season"], user["id"])
+                self.send_json(purchase)
             except AuthError as error:
                 self.send_json({"error": str(error)}, 400)
             except ValueError:
@@ -142,6 +202,25 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json({"error": "Invalid request"}, 400)
             return
         self.send_json({"error": "Endpoint not found"}, 404)
+
+    def settle_due_elections(self):
+        now = self.league.clock()
+        for season in self.auth.pending_election_seasons():
+            if now >= self.league.election_timing(season)["closes_at"]:
+                result = self.auth.finalize_election(season)
+                self.league.apply_pit_outcomes(season, result["pit_crew"])
+
+    def enrich_election_result(self, result):
+        if result is None:
+            return None
+        enriched = {**result, "pit_crew": []}
+        for outcome in result["pit_crew"]:
+            item = dict(outcome)
+            item["target_a_name"] = self.league.roster[item["target_a"]]["name"]
+            if item["target_b"] is not None:
+                item["target_b_name"] = self.league.roster[item["target_b"]]["name"]
+            enriched["pit_crew"].append(item)
+        return enriched
 
     def request_json(self):
         try:

@@ -42,6 +42,24 @@ let fanActivity = [];
 let eternals = null;
 let eternalsView = "drivers";
 let eternalsRequest = 0;
+let finalLap = null;
+let finalLapRequest = 0;
+
+const finalLapChoices = [
+  { id: "team-work", title: "Team Work" },
+  { id: "advertising", title: "Advertising" },
+  { id: "explosions", title: "Explosions" },
+];
+
+const pitCrewActions = [
+  { id: "car-swap", title: "Car Swap", detail: "Swap cars between two drivers.", targets: 2 },
+  { id: "haunting", title: "Haunting", detail: "Give a driver the Haunted modifier.", targets: 1 },
+  { id: "soul-swap", title: "Soul Swap", detail: "Swap two drivers’ Reflexes, Pride, and Focus.", targets: 2 },
+  { id: "white-coffee", title: "White Coffee", detail: "Give a driver the Fritez modifier.", targets: 1 },
+  { id: "eye-exam", title: "Eye Exam", detail: "Give a driver Beautiful Vision and change their eye count.", targets: 1 },
+  { id: "tune-down", title: "Tune Down", detail: "Give a driver’s car Unheard Frequency.", targets: 1 },
+  { id: "reflective-paint", title: "Reflective Paint", detail: "Give a driver’s car the Shiny modifier.", targets: 1 },
+];
 
 const towerItems = [
   { id: "binoculars", name: "Binoculars", cost: 100, icon: "◉", effect: "Every time your Favorite Racer wins, gain 10 Coin." },
@@ -99,6 +117,7 @@ async function loadAccount() {
     if (page === "fan") renderFanPage();
     if (page === "tower") renderTower();
     if (page === "eternals") renderEternals();
+    if (page === "final-lap") loadFinalLap();
   } catch (_) { /* The normal connection indicator covers unavailable servers. */ }
 }
 
@@ -397,6 +416,14 @@ function attributeMarkup(groups) {
     : `<div class="stat-row"><span>${escapeHTML(stat.name)}</span><span class="stat-bar"><i style="width:${stat.value}%"></i></span><span>${stat.value}</span></div>`).join("")}</div>`).join("");
 }
 
+function modifierMarkup(modifiers) {
+  if (!modifiers?.length) return "";
+  return `<div class="modifier-list" aria-label="Modifiers">${modifiers.map(modifier => {
+    const description = escapeHTML(modifier.description || "");
+    return `<span class="modifier-box" tabindex="0" title="${description}" aria-label="${escapeHTML(modifier.name)}: ${description}">${escapeHTML(modifier.name)}</span>`;
+  }).join("")}</div>`;
+}
+
 function openDriver(id) {
   const driver = drivers.find(item => item.id === id);
   if (!driver) return;
@@ -405,8 +432,8 @@ function openDriver(id) {
   dialogRequest++;
   $("#dialog-eyebrow").textContent = "DRIVER DOSSIER";
   $("#dialog-content").innerHTML = `<div style="--driver-color:${driver.color}">
-    <div class="profile-header"><div><h2 id="dialog-title" class="dialog-title">${escapeHTML(driver.name)}</h2><p class="dialog-subtitle">${escapeHTML(selectedSeason?.name || "Current")} season <span class="divider-dot">/</span> ${driver.wins} wins <span class="divider-dot">/</span> ${driver.starts} starts</p></div><span class="profile-number">${driver.number}</span></div>
-    <div class="profile-car">${carSVG(driver.color, driver.number)}<div><div class="eyebrow">THE MACHINE</div><h3>${escapeHTML(driver.car.name)}</h3></div></div>
+    <div class="profile-header"><div><h2 id="dialog-title" class="dialog-title">${escapeHTML(driver.name)}</h2><p class="dialog-subtitle">${escapeHTML(selectedSeason?.name || "Current")} season <span class="divider-dot">/</span> ${driver.wins} wins <span class="divider-dot">/</span> ${driver.starts} starts</p>${modifierMarkup(driver.modifiers)}</div><span class="profile-number">${driver.number}</span></div>
+    <div class="profile-car">${carSVG(driver.color, driver.number)}<div><div class="eyebrow">THE MACHINE</div><h3>${escapeHTML(driver.car.name)}</h3>${modifierMarkup(driver.car.modifiers)}</div></div>
     <div class="stat-sections"><section class="stat-column"><h3>01 / DRIVER ATTRIBUTES</h3>${attributeMarkup(driver.attributes)}</section><section class="stat-column"><h3>02 / CAR ATTRIBUTES</h3>${attributeMarkup(driver.car.attributes)}</section></div></div>`;
   showDialog();
 }
@@ -674,7 +701,7 @@ function showDialog() {
 
 function changePage() {
   const requested = location.hash.slice(1) || "live";
-  page = ["live", "drivers", "tracks", "history", "fan", "tower", "eternals"].includes(requested) && (!["fan", "tower", "eternals"].includes(requested) || currentUser) ? requested : "live";
+  page = ["live", "drivers", "tracks", "history", "final-lap", "fan", "tower", "eternals"].includes(requested) && (!["fan", "tower", "eternals"].includes(requested) || currentUser) ? requested : "live";
   $$(".page").forEach(section => { section.hidden = section.id !== `page-${page}`; });
   $$("nav [data-page]").forEach(link => {
     const active = link.dataset.page === page;
@@ -683,13 +710,14 @@ function changePage() {
     else link.removeAttribute("aria-current");
   });
   $$(".nav-menu").forEach(menu => menu.classList.toggle("active", !!$("[data-page].active", menu)));
-  document.title = `${{ live: "Races", drivers: "Drivers", tracks: "Tracks", history: "Current Season", fan: "You", tower: "The Tower", eternals: "The Eternals" }[page]} — VASTCAR RACING`;
+  document.title = `${{ live: "Races", drivers: "Drivers", tracks: "Tracks", history: "Season", "final-lap": "Final Lap", fan: "You", tower: "The Tower", eternals: "The Eternals" }[page]} — VASTCAR RACING`;
   if (page === "drivers") {
     if (drivers.length) renderDrivers();
     else $("#driver-grid").innerHTML = '<div class="loading-state">Opening the paddock…</div>';
     loadDrivers();
   }
   if (page === "history") loadHistory();
+  if (page === "final-lap") loadFinalLap();
   if (page === "tracks") {
     if (tracks.length) renderTracks();
     else $("#track-grid").innerHTML = '<div class="loading-state">Mapping the circuit…</div>';
@@ -706,6 +734,101 @@ function changePage() {
     loadEternals();
   }
   window.scrollTo({ top: 0, behavior: "instant" });
+}
+
+async function loadFinalLap() {
+  const request = ++finalLapRequest;
+  try {
+    const data = await api("/api/final-lap");
+    if (request !== finalLapRequest) return;
+    finalLap = data;
+    renderFinalLap();
+  } catch (_) {
+    if (page === "final-lap") $("#final-lap-content").innerHTML = emptyState("The podium signal is out of range.", "We’ll try the timing tower again in a moment.");
+  }
+}
+
+function renderFinalLap() {
+  if (page !== "final-lap" || !finalLap) return;
+  const root = $("#final-lap-content");
+  if (!finalLap.winner) {
+    root.innerHTML = `<div class="final-lap-pending"><div class="final-lap-trophy" aria-hidden="true">🏆</div><h1 id="final-lap-title">The final lap is still ahead.</h1><p>The Administrator will open the podium after the season championship.</p></div>`;
+    return;
+  }
+  root.innerHTML = `<div class="final-lap-hero" style="--winner-color:${finalLap.winner.color}">
+    <p class="eyebrow">FINAL LAP · SEASON ${String(finalLap.season.number).padStart(2, "0")}</p>
+    <div class="final-lap-trophy" aria-hidden="true">🏆</div>
+    <h1 id="final-lap-title">Congratulations from the Administrator to <em>${escapeHTML(finalLap.winner.name)}</em> for winning the ${escapeHTML(finalLap.season.name)} Season</h1>
+    <div class="champion-totals"><div><strong>${String(finalLap.wins).padStart(2, "0")}</strong><span>OVERALL WINS THIS SEASON</span></div><i></i><div><strong>${finalLap.winner.fans || 0}</strong><span>FANS</span></div></div>
+  </div>${electionMarkup(finalLap.election)}`;
+}
+
+function electionMarkup(election) {
+  if (!election || election.phase === "locked") return `<section class="election-locked"><p class="eyebrow">THE ADMINISTRATION</p><div class="election-title">Next Season Voting will be revealed Thursday</div></section>`;
+  if (election.phase === "results") return electionResultsMarkup(election);
+  const selected = election.amendments?.selected;
+  const disabled = !currentUser || !!selected;
+  const driverOptions = (election.drivers || []).map(driver => `<option value="${driver.id}">№ ${driver.number} · ${escapeHTML(driver.name)}</option>`).join("");
+  return `<section class="election-window">
+    <div class="election-intro"><p class="eyebrow">VOTING OPEN · CLOSES ${escapeHTML(easternStartTime(election.closes_at).toUpperCase())}</p><div class="election-title">The Administration is listening.</div><p>Two distinct ballots. Amendment votes are permanent once cast. Pit crew entries cost 10 Coin each.</p></div>
+    <div class="election-group"><div class="election-group-head"><div><span>01 / VASTCAR AMENDMENTS</span><strong>The Administration wants your opinion on the future of VastCar</strong></div><small>ONE LOCKED VOTE</small></div>
+      <div class="amendment-options">${finalLapChoices.map(choice => `<button type="button" class="amendment-option ${selected === choice.id ? "selected" : ""}" data-final-lap-vote="${choice.id}" ${disabled ? "disabled" : ""} aria-pressed="${selected === choice.id}"><span>${escapeHTML(choice.title)}</span><i>${selected === choice.id ? "VOTE LOCKED" : "SELECT"}</i></button>`).join("")}</div>
+      <p id="final-lap-vote-status" class="election-status" role="status" aria-live="polite">${selected ? "Your amendment vote is locked in." : currentUser ? "Choose carefully. This vote cannot be changed." : "Log in to cast an amendment vote."}</p>
+    </div>
+    <div class="election-group"><div class="election-group-head"><div><span>02 / PIT CREW HELP</span><strong>Lend your support or disgust to our Eternal Racers</strong></div><small>10 COIN / ENTRY</small></div>
+      <p class="pit-explanation">Every purchase adds one raffle entry. The Administration draws up to ten unique changes when voting closes; duplicate drawn choices are discarded.</p>
+      <div class="pit-action-grid">${pitCrewActions.map(action => `<div class="pit-action" data-pit-action-card="${action.id}"><div><b>${escapeHTML(action.title)}</b><p>${escapeHTML(action.detail)}</p></div><label>DRIVER<select data-pit-target-a>${driverOptions}</select></label>${action.targets === 2 ? `<label>SECOND DRIVER<select data-pit-target-b>${driverOptions}</select></label>` : ""}<button type="button" data-buy-pit-entry="${action.id}" ${!currentUser ? "disabled" : ""}>ADD ENTRY · 10 COIN</button></div>`).join("")}</div>
+      <p id="pit-crew-status" class="election-status" role="status" aria-live="polite">${currentUser ? `${election.pit_crew.mine} of your entries · ${currentUser.coin} Coin available` : "Log in to buy pit crew entries."}</p>
+    </div>
+  </section>`;
+}
+
+function electionResultsMarkup(election) {
+  const result = election.result || { amendments: {}, pit_crew: [] };
+  const total = Object.values(result.amendments).reduce((sum, value) => sum + value, 0);
+  const actionName = id => pitCrewActions.find(action => action.id === id)?.title || id;
+  return `<section class="election-window election-results"><div class="election-intro"><p class="eyebrow">VOTING CLOSED · SEASON ${String(election.season).padStart(2, "0")}</p><div class="election-title">The results are in.</div><p>The Final Lap will lock Tuesday. The next election is revealed Thursday.</p></div>
+    <div class="election-group"><div class="election-group-head"><div><span>01 / VASTCAR AMENDMENTS</span><strong>Final vote</strong></div><small>${total} ${total === 1 ? "VOTE" : "VOTES"}</small></div><div class="result-list">${finalLapChoices.map(choice => { const votes = result.amendments[choice.id] || 0; return `<div><b>${escapeHTML(choice.title)}</b><span>${votes} · ${total ? Math.round(votes / total * 100) : 0}%</span></div>`; }).join("")}</div></div>
+    <div class="election-group"><div class="election-group-head"><div><span>02 / PIT CREW HELP</span><strong>Changes selected by raffle</strong></div><small>${result.pit_crew.length} SELECTED</small></div><div class="pit-results">${result.pit_crew.length ? result.pit_crew.map((outcome, index) => `<div><span>${String(index + 1).padStart(2, "0")}</span><b>${escapeHTML(actionName(outcome.action))}</b><p>${escapeHTML(outcome.target_a_name)}${outcome.target_b_name ? ` ↔ ${escapeHTML(outcome.target_b_name)}` : ""}</p></div>`).join("") : "<p>No pit crew changes were entered.</p>"}</div></div>
+  </section>`;
+}
+
+async function castFinalLapVote(button) {
+  const status = $("#final-lap-vote-status");
+  $$("[data-final-lap-vote]").forEach(option => { option.disabled = true; });
+  status.textContent = "Sending your vote to the Administrator…";
+  try {
+    const response = await fetch("/api/final-lap/amendment", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ season: finalLap.election.season, choice: button.dataset.finalLapVote }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to cast that vote");
+    finalLap.election.amendments = data.poll;
+    renderFinalLap();
+    $("#final-lap-vote-status").textContent = "Your vote is in. Thank you.";
+  } catch (cause) {
+    status.textContent = cause.message;
+    $$("[data-final-lap-vote]").forEach(option => { option.disabled = false; });
+  }
+}
+
+async function buyPitCrewEntry(button) {
+  const card = button.closest("[data-pit-action-card]");
+  const status = $("#pit-crew-status");
+  button.disabled = true;
+  status.textContent = "Adding your entry to the raffle…";
+  try {
+    const targetA = Number($("[data-pit-target-a]", card).value);
+    const targetBSelect = $("[data-pit-target-b]", card);
+    const response = await fetch("/api/final-lap/pit-crew", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ season: finalLap.election.season, action: button.dataset.buyPitEntry, target_a: targetA, target_b: targetBSelect ? Number(targetBSelect.value) : null }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to add that entry");
+    currentUser = data.user;
+    finalLap.election.pit_crew = data.pit_crew;
+    renderFinalLap();
+    $("#pit-crew-status").textContent = "Entry added to the raffle.";
+  } catch (cause) {
+    status.textContent = cause.message;
+    button.disabled = false;
+  }
 }
 
 async function poll() {
@@ -735,6 +858,7 @@ async function poll() {
       if (currentUser) await loadAccount();
       if (page === "history") loadHistory();
       if (page === "eternals") loadEternals();
+      if (page === "final-lap") loadFinalLap();
     }
   } catch (_) {
     $("#connection").hidden = false;
@@ -786,6 +910,10 @@ document.addEventListener("click", event => {
   const fanMove = event.target.closest("[data-fan-move]");
   const bet = event.target.closest("[data-place-bet]");
   const eternalsTab = event.target.closest("[data-eternals-view]");
+  const finalLapVote = event.target.closest("[data-final-lap-vote]");
+  const pitCrewEntry = event.target.closest("[data-buy-pit-entry]");
+  if (finalLapVote && !finalLapVote.disabled) castFinalLapVote(finalLapVote);
+  if (pitCrewEntry && !pitCrewEntry.disabled) buyPitCrewEntry(pitCrewEntry);
   if (eternalsTab) {
     eternalsView = eternalsTab.dataset.eternalsView;
     renderEternals();

@@ -16,9 +16,9 @@
     <a class="wordmark" href="#live" aria-label="VASTCAR RACING home"><span class="brand-symbol" aria-hidden="true">ϟ</span><span>VASTCAR<br>RACING<span class="brand-dot">®</span></span></a>
     <nav aria-label="Main navigation">
       <a href="#live" data-page="live" class="active"><span class="nav-dot"></span>Races<span class="nav-count">03</span></a>
-      <details class="nav-menu" id="stats-nav"><summary>Stats<span class="nav-chevron" aria-hidden="true">⌄</span></summary><div class="nav-popover"><a href="#drivers" data-page="drivers">Drivers<span class="nav-count">30</span></a><a href="#tracks" data-page="tracks">Tracks<span class="nav-count">12</span></a></div></details>
-      <a href="#history" data-page="history">Current Season<span class="arrow">↗</span></a>
+      <details class="nav-menu" id="stats-nav"><summary>Stats<span class="nav-chevron" aria-hidden="true">⌄</span></summary><div class="nav-popover"><a href="#drivers" data-page="drivers">Drivers<span class="nav-count">30</span></a><a href="#tracks" data-page="tracks">Tracks<span class="nav-count">12</span></a><a href="#history" data-page="history">Season<span aria-hidden="true">↗</span></a></div></details>
       <details class="nav-menu" id="portal-nav" hidden><summary>Portal<span class="nav-chevron" aria-hidden="true">⌄</span></summary><div class="nav-popover"><a href="#fan" data-page="fan">You<span aria-hidden="true">♥</span></a><a href="#tower" data-page="tower">The Tower<span aria-hidden="true">↗</span></a><a href="#eternals" data-page="eternals">The Eternals<span aria-hidden="true">♛</span></a></div></details>
+      <a href="#final-lap" data-page="final-lap">Final Lap<span aria-hidden="true">🏆</span></a>
     </nav>
     <div class="header-right"><div class="next-wave"><div class="eyebrow">NEXT RACES <span>↗</span></div><div id="countdown" class="countdown">--<span>:</span>--</div></div><div id="account" class="account"><button id="login" class="account-button">Log in</button><button id="register" class="account-button account-primary">Register</button><span id="account-name" class="account-name" hidden></span><button id="logout" class="logout" hidden>Sign out</button></div></div>
   </header>
@@ -48,6 +48,9 @@
       <div class="season-header"><h1 id="history-title">The Eclipse Season</h1><div class="season-progress" id="history-number">0 / 300<span>RACES COMPLETE</span></div></div>
       <div class="toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="history-search" type="search" placeholder="Search city or race number…" aria-label="Search historic races by city or number"></label><label class="select-label">LOCATION <select id="history-city"><option value="">All cities</option><option>Tokyo</option><option>Montréal</option><option>São Paulo</option><option>Reykjavík</option><option>Melbourne</option></select></label><span class="micro">LATEST FIRST</span></div>
       <div id="history-list"></div><div id="pagination" class="pagination"></div>
+    </section>
+    <section id="page-final-lap" class="page" hidden aria-labelledby="final-lap-title">
+      <div id="final-lap-content"><div class="loading-state">Preparing the podium…</div></div>
     </section>
     <section id="page-fan" class="page" hidden aria-labelledby="fan-title">
       <div class="fan-header"><div><h1 id="fan-title">Your fan page</h1></div><div class="fan-coin"><span>COINS</span><b id="fan-coin-value">0</b></div></div>

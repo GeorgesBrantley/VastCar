@@ -60,7 +60,14 @@ CAR_ATTRIBUTES = {
     "Frame": ["Reliability", "Rust"],
     "Anomaly": ["Veil", "Wheels"],
 }
-ROSTER_VERSION = 3
+MODIFIERS = {
+    "haunted": {"name": "Haunted", "description": "Don't Look Behind", "implementation": "haunted"},
+    "fritez": {"name": "Fritez", "description": "Good Coffee for the Souls", "implementation": "fritez"},
+    "beautiful-vision": {"name": "Beautiful Vision", "description": "E F P T O Z", "implementation": "beautiful-vision"},
+    "unheard-frequency": {"name": "Unheard Frequency", "description": "Car loses 30 Horsepower, gains 10 Ghostpower, and gains 10 Veil.", "implementation": "unheard-frequency"},
+    "shiny": {"name": "Shiny", "description": "Car loses 50 Rust and gains 50 Hauntings.", "implementation": "shiny"},
+}
+ROSTER_VERSION = 4
 NAMES = [
     ("Juno Static", "Saint Elsewhere"), ("Milo Afterhours", "The Debt Collector"),
     ("Velvet Okafor", "Soft Apocalypse"), ("Cassette Lee", "Side B"),
@@ -215,25 +222,48 @@ def make_roster():
     return [{
         "id": i + 1, "number": f"{i + 1:02d}", "name": name,
         "color": COLORS[i % len(COLORS)], "hometown": CITIES[i % 5]["name"],
+        "modifiers": [],
         "attributes": attributes(rng, DRIVER_ATTRIBUTES),
-        "car": {"name": car, "attributes": attributes(rng, CAR_ATTRIBUTES, i in force_outliers)},
+        "car": {"name": car, "modifiers": [],
+                "attributes": attributes(rng, CAR_ATTRIBUTES, i in force_outliers)},
     } for i, (name, car) in enumerate(NAMES)]
 
 
-def stat_map(driver):
+def stat_map(driver, effective=True):
     groups = driver["attributes"] + driver["car"]["attributes"]
-    return {stat["name"]: stat["value"] for group in groups for stat in group["stats"]}
+    stats = {stat["name"]: stat["value"] for group in groups for stat in group["stats"]}
+    if not effective:
+        return stats
+    implementations = {modifier.get("implementation") for modifier in driver.get("modifiers", [])}
+    car_implementations = {modifier.get("implementation") for modifier in driver["car"].get("modifiers", [])}
+    adjustments = {}
+    if "haunted" in implementations:
+        adjustments.update({"Unfinished business": 25, "Focus": -30})
+    if "fritez" in implementations:
+        adjustments.update({"Reflexes": 25, "Déjà vu": -30})
+    if "unheard-frequency" in car_implementations:
+        adjustments.update({"Horsepower": -30, "Ghostpower": 10, "Veil": 10})
+    if "shiny" in car_implementations:
+        adjustments.update({"Rust": -50, "Hauntings": 50})
+    for name, change in adjustments.items():
+        stats[name] = max(0, min(100, stats[name] + change))
+    return stats
 
 
 def migrate_driver(driver, template):
     """Upgrade the original roster names without disturbing identity or history."""
-    old = stat_map(driver)
+    old = stat_map(driver, effective=False)
     renamed = {
         "Pride": "Racecraft",
         "Hauntings": "Corner memory",
         "Veil": "Slipstream",
     }
-    result = {**driver, "attributes": [], "car": {**driver["car"], "attributes": []}}
+    result = {
+        **driver,
+        "modifiers": driver.get("modifiers", []),
+        "attributes": [],
+        "car": {**driver["car"], "modifiers": driver["car"].get("modifiers", []), "attributes": []},
+    }
     for destination, source in ((result["attributes"], template["attributes"]),
                                 (result["car"]["attributes"], template["car"]["attributes"])):
         for group in source:
@@ -639,6 +669,130 @@ class League:
             generated = [row[0] for row in self.db.execute("SELECT DISTINCT season FROM races WHERE season>0 ORDER BY season DESC")]
             numbers = sorted(set(generated + [current]), reverse=True)
             return [{"number": number, "name": season_name(number), "current": number == current} for number in numbers]
+
+    def final_lap(self):
+        """Return the newest champion and the current weekly election window."""
+        with self.lock:
+            now = self.clock()
+            self.tick(now)
+            row = self.db.execute(
+                "SELECT * FROM races WHERE completed=1 AND season_slot=? ORDER BY season DESC LIMIT 1",
+                (CHAMPIONSHIP_FINAL_SLOT,),
+            ).fetchone()
+            if row is None:
+                return {"winner": None}
+            winner_id = row["winner"]
+            wins = self.db.execute(
+                "SELECT COUNT(*) FROM races WHERE completed=1 AND season=? AND winner=?",
+                (row["season"], winner_id),
+            ).fetchone()[0]
+            driver = self.roster[winner_id]
+            result = {
+                "season": {"number": row["season"], "name": season_name(row["season"])},
+                "winner": {key: driver[key] for key in ("id", "name", "number", "color")},
+                "wins": wins,
+            }
+            local_now = datetime.fromtimestamp(now, EASTERN)
+            reveal_date = local_now.date() - timedelta(days=(local_now.weekday() - 3) % 7)
+            reveal = datetime.combine(reveal_date, datetime_time(), EASTERN).timestamp()
+            closes = datetime.combine(reveal_date + timedelta(days=3), datetime_time(13), EASTERN).timestamp()
+            results_end = datetime.combine(reveal_date + timedelta(days=5), datetime_time(), EASTERN).timestamp()
+            election_row = self.db.execute(
+                """SELECT * FROM races WHERE completed=1 AND season_slot=? AND end<=?
+                   ORDER BY season DESC LIMIT 1""",
+                (CHAMPIONSHIP_FINAL_SLOT, reveal),
+            ).fetchone()
+            if election_row:
+                phase = "open" if now < closes else "results" if now < results_end else "locked"
+                result["election"] = {
+                    "season": election_row["season"],
+                    "season_name": season_name(election_row["season"]),
+                    "phase": phase,
+                    "opens_at": reveal,
+                    "closes_at": closes,
+                    "results_end_at": results_end,
+                }
+            else:
+                result["election"] = None
+            return result
+
+    def election_timing(self, season):
+        """Return the Thursday-to-Tuesday election timing following a season."""
+        reveal_date = season_start_date(self.season_zero_date, season) + timedelta(days=10)
+        opens = datetime.combine(reveal_date, datetime_time(), EASTERN).timestamp()
+        closes = datetime.combine(reveal_date + timedelta(days=3), datetime_time(13), EASTERN).timestamp()
+        results_end = datetime.combine(reveal_date + timedelta(days=5), datetime_time(), EASTERN).timestamp()
+        return {"opens_at": opens, "closes_at": closes, "results_end_at": results_end}
+
+    def apply_pit_outcomes(self, season, outcomes):
+        """Apply one finalized election's unique pit-crew changes exactly once."""
+        marker = f"pit_crew_effects:{season}"
+        with self.lock, self.db:
+            if self.db.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
+                return False
+            changed = set()
+
+            def stat(driver, name):
+                for group in driver["attributes"] + driver["car"]["attributes"]:
+                    for entry in group["stats"]:
+                        if entry["name"] == name:
+                            return entry
+                raise KeyError(name)
+
+            def refresh(driver):
+                for group in driver["attributes"] + driver["car"]["attributes"]:
+                    group["value"] = attribute_value(group["stats"])
+
+            def add_modifier(container, key):
+                implementation = MODIFIERS[key]["implementation"]
+                modifiers = container.setdefault("modifiers", [])
+                if not any(item.get("implementation") == implementation for item in modifiers):
+                    modifiers.append(dict(MODIFIERS[key]))
+
+            for outcome in outcomes:
+                action = outcome.get("action")
+                first_id = outcome.get("target_a")
+                second_id = outcome.get("target_b")
+                if first_id not in self.roster or (second_id is not None and second_id not in self.roster):
+                    continue
+                first = self.roster[first_id]
+                if action == "car-swap" and second_id != first_id:
+                    second = self.roster[second_id]
+                    first["car"], second["car"] = second["car"], first["car"]
+                    changed.update((first_id, second_id))
+                elif action == "soul-swap" and second_id != first_id:
+                    second = self.roster[second_id]
+                    for name in ("Reflexes", "Pride", "Focus"):
+                        one, two = stat(first, name), stat(second, name)
+                        one["value"], two["value"] = two["value"], one["value"]
+                    refresh(first)
+                    refresh(second)
+                    changed.update((first_id, second_id))
+                elif action == "haunting":
+                    add_modifier(first, "haunted")
+                    changed.add(first_id)
+                elif action == "white-coffee":
+                    add_modifier(first, "fritez")
+                    changed.add(first_id)
+                elif action == "eye-exam":
+                    eye = stat(first, "Eyes")
+                    choices = [value for value in range(9) if value != eye["value"]]
+                    eye["value"] = random.Random(f"{season}:eye-exam:{first_id}").choice(choices)
+                    add_modifier(first, "beautiful-vision")
+                    refresh(first)
+                    changed.add(first_id)
+                elif action == "tune-down":
+                    add_modifier(first["car"], "unheard-frequency")
+                    changed.add(first_id)
+                elif action == "reflective-paint":
+                    add_modifier(first["car"], "shiny")
+                    changed.add(first_id)
+
+            for driver_id in changed:
+                self.db.execute("UPDATE drivers SET data=? WHERE id=?",
+                                (json.dumps(self.roster[driver_id]), driver_id))
+            self.db.execute("INSERT INTO meta(key,value) VALUES (?,?)", (marker, json.dumps(outcomes)))
+            return True
 
     def eternals(self):
         """Return all-time championship honors and the completed season archive."""

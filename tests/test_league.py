@@ -8,7 +8,7 @@ import unittest
 from league import (
     CAR_ATTRIBUTES, CHAMPIONSHIP_FINAL_SLOT, CHAMPIONSHIP_R1_SLOT,
     CHAMPIONSHIP_R2_SLOT, CITIES, DRIVER_ATTRIBUTES, EASTERN, INTERVAL,
-    League, RACES_PER_SEASON, ROSTER_VERSION, SLOTS_PER_SEASON,
+    League, MODIFIERS, RACES_PER_SEASON, ROSTER_VERSION, SLOTS_PER_SEASON,
     slot_start_timestamp, stat_map,
 )
 
@@ -80,6 +80,64 @@ class LeagueTests(unittest.TestCase):
             if any(not 40 <= stat_map(driver)[name] <= 60 for name in ("Horsepower", "Ghostpower"))
         ]
         self.assertEqual(len(force_outliers), 5)
+
+    def test_modifiers_change_effective_stats_and_clamp_values(self):
+        driver = self.league.roster[1]
+        base = stat_map(driver, effective=False)
+        driver["modifiers"] = [MODIFIERS["haunted"], MODIFIERS["fritez"]]
+        driver["car"]["modifiers"] = [MODIFIERS["unheard-frequency"], MODIFIERS["shiny"]]
+        effective = stat_map(driver)
+        self.assertEqual(effective["Unfinished business"], min(100, base["Unfinished business"] + 25))
+        self.assertEqual(effective["Focus"], max(0, base["Focus"] - 30))
+        self.assertEqual(effective["Reflexes"], min(100, base["Reflexes"] + 25))
+        self.assertEqual(effective["Déjà vu"], max(0, base["Déjà vu"] - 30))
+        self.assertEqual(effective["Horsepower"], max(0, base["Horsepower"] - 30))
+        self.assertEqual(effective["Ghostpower"], min(100, base["Ghostpower"] + 10))
+        self.assertEqual(effective["Rust"], max(0, base["Rust"] - 50))
+        self.assertEqual(effective["Hauntings"], min(100, base["Hauntings"] + 50))
+
+    def test_pit_outcomes_persist_once_and_swap_driver_properties(self):
+        first_car = self.league.roster[1]["car"]["name"]
+        second_car = self.league.roster[2]["car"]["name"]
+        first_soul = {name: stat_map(self.league.roster[3], effective=False)[name]
+                      for name in ("Reflexes", "Pride", "Focus")}
+        second_soul = {name: stat_map(self.league.roster[4], effective=False)[name]
+                       for name in ("Reflexes", "Pride", "Focus")}
+        old_eyes = stat_map(self.league.roster[5], effective=False)["Eyes"]
+        outcomes = [
+            {"action": "car-swap", "target_a": 1, "target_b": 2},
+            {"action": "soul-swap", "target_a": 3, "target_b": 4},
+            {"action": "haunting", "target_a": 5, "target_b": None},
+            {"action": "white-coffee", "target_a": 5, "target_b": None},
+            {"action": "eye-exam", "target_a": 5, "target_b": None},
+            {"action": "tune-down", "target_a": 5, "target_b": None},
+            {"action": "reflective-paint", "target_a": 5, "target_b": None},
+        ]
+        self.assertTrue(self.league.apply_pit_outcomes(9, outcomes))
+        self.assertFalse(self.league.apply_pit_outcomes(9, outcomes))
+        self.assertEqual(self.league.roster[1]["car"]["name"], second_car)
+        self.assertEqual(self.league.roster[2]["car"]["name"], first_car)
+        for name in first_soul:
+            self.assertEqual(stat_map(self.league.roster[3], effective=False)[name], second_soul[name])
+            self.assertEqual(stat_map(self.league.roster[4], effective=False)[name], first_soul[name])
+        driver = self.league.roster[5]
+        self.assertNotEqual(stat_map(driver, effective=False)["Eyes"], old_eyes)
+        self.assertEqual({item["implementation"] for item in driver["modifiers"]},
+                         {"haunted", "fritez", "beautiful-vision"})
+        self.assertEqual({item["implementation"] for item in driver["car"]["modifiers"]},
+                         {"unheard-frequency", "shiny"})
+        stored = json.loads(self.league.db.execute("SELECT data FROM drivers WHERE id=5").fetchone()[0])
+        self.assertEqual(stored["modifiers"], driver["modifiers"])
+
+    def test_final_lap_election_opens_thursday_closes_sunday_and_locks_tuesday(self):
+        self.now = datetime(2026, 9, 24, 10, 0, 0, 0, EASTERN).timestamp()
+        feature = self.league.final_lap()
+        self.assertEqual(feature["election"]["season"], 1)
+        self.assertEqual(feature["election"]["phase"], "open")
+        self.now = datetime(2026, 9, 27, 13, 0, 0, 0, EASTERN).timestamp()
+        self.assertEqual(self.league.final_lap()["election"]["phase"], "results")
+        self.now = datetime(2026, 9, 29, 0, 0, 0, 0, EASTERN).timestamp()
+        self.assertEqual(self.league.final_lap()["election"]["phase"], "locked")
 
     def test_stat_driven_events_have_signed_effects_and_weather_is_not_an_event(self):
         with self.league.db:

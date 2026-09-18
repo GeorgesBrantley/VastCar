@@ -45,6 +45,17 @@ MAX_STACK_SIZE = 10
 ACTIVE_SLOT_LIMIT = 3
 STASH_SLOT_LIMIT = 5
 STACK_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,64}\Z")
+FINAL_LAP_CHOICES = ("team-work", "advertising", "explosions")
+PIT_CREW_ACTIONS = {
+    "car-swap": 2,
+    "haunting": 1,
+    "soul-swap": 2,
+    "white-coffee": 1,
+    "eye-exam": 1,
+    "tune-down": 1,
+    "reflective-paint": 1,
+}
+PIT_CREW_TICKET_COST = 10
 
 
 class AuthError(Exception):
@@ -123,6 +134,33 @@ class LocalAuth:
             self.db.execute(
             "CREATE INDEX IF NOT EXISTS fan_activity_user_season ON fan_activity(user_id, season, id DESC)"
             )
+            self.db.execute("""
+                CREATE TABLE IF NOT EXISTS final_lap_votes (
+                    user_id INTEGER NOT NULL,
+                    season INTEGER NOT NULL,
+                    choice TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY (user_id, season)
+                )
+            """)
+            self.db.execute("""
+                CREATE TABLE IF NOT EXISTS pit_crew_tickets (
+                    id INTEGER PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    season INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    target_a INTEGER NOT NULL,
+                    target_b INTEGER,
+                    created_at INTEGER NOT NULL
+                )
+            """)
+            self.db.execute("""
+                CREATE TABLE IF NOT EXISTS final_lap_results (
+                    season INTEGER PRIMARY KEY,
+                    result TEXT NOT NULL,
+                    finalized_at INTEGER NOT NULL
+                )
+            """)
             self._migrate_bets()
 
     def _migrate_bets(self):
@@ -214,6 +252,109 @@ class LocalAuth:
                 "SELECT fav_racer, COUNT(*) AS fans FROM users WHERE fav_racer IS NOT NULL GROUP BY fav_racer"
             )
             return {row["fav_racer"]: row["fans"] for row in rows}
+
+    def final_lap_poll(self, season, user_id=None):
+        with self.lock:
+            totals = {choice: 0 for choice in FINAL_LAP_CHOICES}
+            for row in self.db.execute(
+                "SELECT choice, COUNT(*) AS total FROM final_lap_votes WHERE season=? GROUP BY choice", (season,)
+            ):
+                if row["choice"] in totals:
+                    totals[row["choice"]] = row["total"]
+            selected = None
+            if user_id is not None:
+                row = self.db.execute(
+                    "SELECT choice FROM final_lap_votes WHERE user_id=? AND season=?", (user_id, season)
+                ).fetchone()
+                selected = row["choice"] if row else None
+            return {"totals": totals, "selected": selected, "total": sum(totals.values())}
+
+    def vote_final_lap(self, user_id, season, choice):
+        if not isinstance(season, int) or choice not in FINAL_LAP_CHOICES:
+            raise AuthError("Choose a valid Final Lap option")
+        with self.lock, self.db:
+            try:
+                self.db.execute(
+                    "INSERT INTO final_lap_votes(user_id,season,choice,created_at) VALUES (?,?,?,?)",
+                    (user_id, season, choice, int(self.clock())),
+                )
+            except sqlite3.IntegrityError as error:
+                raise AuthError("Your amendment vote is already locked in") from error
+        return self.final_lap_poll(season, user_id)
+
+    def buy_pit_crew_ticket(self, user_id, season, action, target_a, target_b=None):
+        selections = PIT_CREW_ACTIONS.get(action)
+        if type(season) is not int or selections is None or type(target_a) is not int:
+            raise AuthError("Choose a valid pit crew change")
+        if selections == 2:
+            if type(target_b) is not int or target_a == target_b:
+                raise AuthError("Choose two different drivers")
+            target_a, target_b = sorted((target_a, target_b))
+        elif target_b is not None:
+            raise AuthError("That pit crew change only needs one driver")
+        with self.lock, self.db:
+            user = self.db.execute("SELECT coin FROM users WHERE id=?", (user_id,)).fetchone()
+            if user is None:
+                raise AuthError("Your session has expired")
+            if user["coin"] < PIT_CREW_TICKET_COST:
+                raise AuthError(f"You need {PIT_CREW_TICKET_COST} Coin for a pit crew entry")
+            self.db.execute("UPDATE users SET coin=coin-? WHERE id=?", (PIT_CREW_TICKET_COST, user_id))
+            cursor = self.db.execute(
+                """INSERT INTO pit_crew_tickets(user_id,season,action,target_a,target_b,created_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (user_id, season, action, target_a, target_b, int(self.clock())),
+            )
+            return {"ticket_id": cursor.lastrowid, "user": self._user_by_id(user_id)}
+
+    def pit_crew_ticket_count(self, season, user_id=None):
+        with self.lock:
+            total = self.db.execute("SELECT COUNT(*) FROM pit_crew_tickets WHERE season=?", (season,)).fetchone()[0]
+            mine = 0 if user_id is None else self.db.execute(
+                "SELECT COUNT(*) FROM pit_crew_tickets WHERE season=? AND user_id=?", (season, user_id)
+            ).fetchone()[0]
+            return {"total": total, "mine": mine}
+
+    def final_lap_result(self, season):
+        with self.lock:
+            row = self.db.execute("SELECT result FROM final_lap_results WHERE season=?", (season,)).fetchone()
+            return json.loads(row["result"]) if row else None
+
+    def finalize_election(self, season):
+        """Draw at most ten unique weighted pit changes and freeze all results."""
+        with self.lock, self.db:
+            existing = self.db.execute("SELECT result FROM final_lap_results WHERE season=?", (season,)).fetchone()
+            if existing:
+                return json.loads(existing["result"])
+            amendments = self.final_lap_poll(season)
+            tickets = [dict(row) for row in self.db.execute(
+                "SELECT id,action,target_a,target_b FROM pit_crew_tickets WHERE season=? ORDER BY id", (season,)
+            )]
+            secrets.SystemRandom().shuffle(tickets)
+            outcomes = []
+            seen = set()
+            for ticket in tickets:
+                key = (ticket["action"], ticket["target_a"], ticket["target_b"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                outcomes.append({key: ticket[key] for key in ("action", "target_a", "target_b")})
+                if len(outcomes) == 10:
+                    break
+            result = {"amendments": amendments["totals"], "pit_crew": outcomes}
+            self.db.execute(
+                "INSERT INTO final_lap_results(season,result,finalized_at) VALUES (?,?,?)",
+                (season, json.dumps(result, separators=(",", ":")), int(self.clock())),
+            )
+            return result
+
+    def pending_election_seasons(self):
+        with self.lock:
+            rows = self.db.execute("""
+                SELECT season FROM final_lap_votes
+                UNION SELECT season FROM pit_crew_tickets
+                EXCEPT SELECT season FROM final_lap_results
+            """).fetchall()
+            return [row["season"] for row in rows]
 
     def buy_item(self, user_id, item_id):
         if not isinstance(item_id, str) or item_id not in ITEMS:
