@@ -599,6 +599,25 @@ class League:
             "racers": self._public_racers(driver_groups[lane], season_number) if driver_groups else [],
         } for lane, city in enumerate(cities)]
 
+    def _next_waves(self, season_number, season_slot):
+        """Return up to ten future public grids, stopping at championship dependencies."""
+        waves = []
+        target_season, target_slot = season_number, season_slot
+        for _offset in range(10):
+            races = self._next_wave(target_season, target_slot)
+            waves.append({
+                "wave": target_slot + 1,
+                "season": target_season,
+                "start": slot_start_timestamp(self.season_zero_date, target_season, target_slot),
+                "races": races,
+            })
+            # Qualifiers are the last future grid that can be known without
+            # exposing an outcome-dependent finalist or championship grid.
+            if target_slot >= CHAMPIONSHIP_R1_SLOT:
+                break
+            target_season, target_slot = next_slot_after(self.season_zero_date, target_season, target_slot)
+        return waves
+
     def tick(self, now=None):
         now = self.clock() if now is None else now
         with self.lock, self.db:
@@ -692,10 +711,12 @@ class League:
                 ).fetchall()
             races = [self._race(row, now) for row in rows]
             next_season, next_slot = next_slot_after(self.season_zero_date, season_number, season_slot)
+            next_waves = self._next_waves(next_season, next_slot)
             total = self.db.execute("SELECT COUNT(*) FROM races WHERE completed=1 AND season=?", (season_number,)).fetchone()[0]
             return {"now": now, "next_start": slot_start_timestamp(self.season_zero_date, next_season, next_slot),
                     "interval": INTERVAL, "wave": (season_slot + 1) if season_slot is not None else 0,
-                    "races": races, "next_races": self._next_wave(next_season, next_slot),
+                    "races": races, "next_waves": next_waves,
+                    "next_races": next_waves[0]["races"] if next_waves else [],
                     "completed_races": total, "season_total_races": RACES_PER_SEASON, "cities": CITIES,
                     "season": {"number": season_number, "name": season_name(season_number), "total_races": RACES_PER_SEASON}}
 
@@ -788,6 +809,9 @@ class League:
                 if not any(item.get("implementation") == implementation for item in modifiers):
                     modifiers.append(dict(MODIFIERS[key]))
 
+            def drivers_on_team(team_id):
+                return [driver_id for driver_id, driver in self.roster.items() if driver["team_id"] == team_id]
+
             for outcome in outcomes:
                 action = outcome.get("action")
                 first_id = outcome.get("target_a")
@@ -826,6 +850,25 @@ class League:
                 elif action == "reflective-paint":
                     add_modifier(first["car"], "shiny")
                     changed.add(first_id)
+                elif action == "double-agent":
+                    alternatives = [driver_id for driver_id in self.roster if driver_id != first_id]
+                    if alternatives:
+                        other_id = random.Random(f"{season}:double-agent:{first_id}").choice(alternatives)
+                        other = self.roster[other_id]
+                        first["team_id"], other["team_id"] = other["team_id"], first["team_id"]
+                        changed.update((first_id, other_id))
+                elif action == "golden-child":
+                    teammates = [driver_id for driver_id in drivers_on_team(first["team_id"]) if driver_id != first_id]
+                    luck = stat(first, "Luck")
+                    luck["value"] += 30
+                    refresh(first)
+                    changed.add(first_id)
+                    for teammate_id in teammates:
+                        teammate = self.roster[teammate_id]
+                        teammate_luck = stat(teammate, "Luck")
+                        teammate_luck["value"] -= 10
+                        refresh(teammate)
+                        changed.add(teammate_id)
 
             for driver_id in changed:
                 self.db.execute("UPDATE drivers SET data=? WHERE id=?",
@@ -1017,13 +1060,14 @@ class League:
             current_season = season_number_for(self.season_zero_date, now)
             current_slot = due_slot_for(self.season_zero_date, current_season, now)
             next_season, next_slot = next_slot_after(self.season_zero_date, current_season, current_slot)
-            for race in self._next_wave(next_season, next_slot):
-                if race["season"] != season or race["race_number"] != race_number or now >= race["start"]:
-                    continue
-                driver = next((entry for entry in race["racers"] if entry["driver_id"] == driver_id), None)
-                if driver:
-                    return {"season": season, "race_number": race_number, "driver_id": driver_id,
-                            "cost": 5 + driver["wins"], "wins": driver["wins"]}
+            for wave in self._next_waves(next_season, next_slot):
+                for race in wave["races"]:
+                    if race["season"] != season or race["race_number"] != race_number or now >= race["start"]:
+                        continue
+                    driver = next((entry for entry in race["racers"] if entry["driver_id"] == driver_id), None)
+                    if driver:
+                        return {"season": season, "race_number": race_number, "driver_id": driver_id,
+                                "cost": 5 + driver["wins"], "wins": driver["wins"]}
             return None
 
     def completed_item_races(self):
@@ -1050,9 +1094,14 @@ class League:
         """Return stable identifiers and winners for finished-race bet settlement."""
         with self.lock:
             self.tick()
-            return [dict(row) for row in self.db.execute(
-                "SELECT season,season_race_number AS race_number,winner FROM races WHERE completed=1 ORDER BY id"
-            )]
+            races = []
+            for row in self.db.execute("SELECT id,season,season_race_number AS race_number,winner,data FROM races WHERE completed=1 ORDER BY id"):
+                data = json.loads(row["data"])
+                crashed = [plan["driver_id"] for plan in data["plans"]
+                            if any(event.get("type") in ("crash", "major-crash") for event in plan.get("events", []))]
+                races.append({"season": row["season"], "race_number": row["race_number"],
+                              "winner": row["winner"], "crashed_drivers": crashed})
+            return races
 
     def close(self):
         with self.lock:

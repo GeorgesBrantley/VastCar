@@ -27,8 +27,9 @@ STARTING_COIN = 200
 DAILY_LOGIN_COIN = 50
 BET_PAYOUT = 100
 MAX_BETS_PER_DRIVER = 10
-SUNGLASSES_BONUS = 1000
-LUCKY_TICKET_BONUS = 5
+SUNGLASSES_BONUS = 500
+LUCKY_TICKET_BONUS = 300
+INSURANCE_BONUS = 100
 
 ITEMS = {
     "binoculars": {"name": "Binoculars", "cost": 100, "effect": "Every time your Favorite Racer wins, gain 10 Coin."},
@@ -37,16 +38,19 @@ ITEMS = {
     "camera": {"name": "Camera", "cost": 30, "effect": "Every time there is a crash, gain 10 Coin."},
     "old-scroll": {"name": "Old Scroll", "cost": 10, "effect": "Every time someone wins for the first time that season, gain 10 Coin."},
     "watch": {"name": "Watch", "cost": 10, "effect": "Gain 50 Coin when any race takes over 8 minutes."},
+    "team-flag": {"name": "Team Flag", "cost": 50, "effect": "Gain 20 Coin when a driver on your sponsored team wins."},
+    "grandfather-clock": {"name": "Grandfather Clock", "cost": 10, "effect": "Gain 50 Coin when the winning time for a race is under 7:30."},
     "vegas-shark": {"name": "Vegas Shark", "cost": 50, "effect": "Decrease a racer's win surcharge by 2 Coin per active Shark."},
-    "sunglasses": {"name": "Sunglasses", "cost": 50, "effect": "Gain 1,000 bonus Coin per active pair when a zero-win pick wins."},
-    "gun": {"name": "Gun", "cost": 100, "effect": "Increase the number of bets you can place per racer by 1."},
-    "lucky-ticket": {"name": "Lucky Ticket", "cost": 1, "effect": "Gain 5 bonus Coin per active ticket when you only back one driver in a race."},
+    "sunglasses": {"name": "Sunglasses", "cost": 50, "effect": "Gain 500 bonus Coin per active pair when a zero-win pick wins."},
+    "gun": {"name": "Gun", "cost": 100, "effect": "Increase the number of bets you can place per racer by 2."},
+    "lucky-ticket": {"name": "Lucky Ticket", "cost": 1, "effect": "Gain 300 bonus Coin per active ticket when you only back one driver in a race."},
+    "insurance": {"name": "Insurance", "cost": 70, "effect": "Gain 100 Coin if a car you bet on experiences a crash."},
 }
 MAX_STACK_SIZE = 10
 ACTIVE_SLOT_LIMIT = 3
 STASH_SLOT_LIMIT = 5
 STACK_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,64}\Z")
-FINAL_LAP_CHOICES = ("team-work", "advertising", "explosions")
+FINAL_LAP_CHOICES = ("weather", "advertising", "explosions")
 PIT_CREW_ACTIONS = {
     "car-swap": 2,
     "haunting": 1,
@@ -55,6 +59,8 @@ PIT_CREW_ACTIONS = {
     "eye-exam": 1,
     "tune-down": 1,
     "reflective-paint": 1,
+    "double-agent": 1,
+    "golden-child": 1,
 }
 PIT_CREW_TICKET_COST = 10
 
@@ -116,6 +122,7 @@ class LocalAuth:
                     spent INTEGER NOT NULL DEFAULT 0 CHECK (spent >= 0),
                     sunglasses INTEGER NOT NULL DEFAULT 0 CHECK (sunglasses >= 0),
                     lucky_tickets INTEGER NOT NULL DEFAULT 0 CHECK (lucky_tickets >= 0),
+                    insurance INTEGER NOT NULL DEFAULT 0 CHECK (insurance >= 0),
                     settled INTEGER NOT NULL DEFAULT 0 CHECK (settled IN (0, 1)),
                     PRIMARY KEY (user_id, season, race_number, driver_id)
                 )
@@ -182,6 +189,7 @@ class LocalAuth:
                     spent INTEGER NOT NULL DEFAULT 0 CHECK (spent >= 0),
                     sunglasses INTEGER NOT NULL DEFAULT 0 CHECK (sunglasses >= 0),
                     lucky_tickets INTEGER NOT NULL DEFAULT 0 CHECK (lucky_tickets >= 0),
+                    insurance INTEGER NOT NULL DEFAULT 0 CHECK (insurance >= 0),
                     settled INTEGER NOT NULL DEFAULT 0 CHECK (settled IN (0, 1)),
                     PRIMARY KEY (user_id, season, race_number, driver_id)
                 )
@@ -197,6 +205,10 @@ class LocalAuth:
                 self.db.execute("ALTER TABLE bets ADD COLUMN sunglasses INTEGER NOT NULL DEFAULT 0 CHECK (sunglasses >= 0)")
             if "lucky_tickets" not in columns:
                 self.db.execute("ALTER TABLE bets ADD COLUMN lucky_tickets INTEGER NOT NULL DEFAULT 0 CHECK (lucky_tickets >= 0)")
+            if "insurance" not in columns:
+                self.db.execute("ALTER TABLE bets ADD COLUMN insurance INTEGER NOT NULL DEFAULT 0 CHECK (insurance >= 0)")
+            if "insurance" not in columns:
+                self.db.execute("ALTER TABLE bets ADD COLUMN insurance INTEGER NOT NULL DEFAULT 0 CHECK (insurance >= 0)")
 
     def close(self):
         with self.lock:
@@ -463,7 +475,7 @@ class LocalAuth:
     def settle_item_rewards(self, races):
         """Pay active equipment once for each finished race supplied by League."""
         with self.lock, self.db:
-            users = self.db.execute("SELECT id, coin, fav_racer, inventory FROM users").fetchall()
+            users = self.db.execute("SELECT id, coin, fav_racer, sponsored_team, inventory FROM users").fetchall()
             for user in users:
                 inventory = self._normalize_inventory(json.loads(user["inventory"]))
                 active = {item: sum(entry["quantity"] for entry in inventory if entry["active"] and entry["item"] == item) for item in ITEMS}
@@ -488,6 +500,11 @@ class LocalAuth:
                         rewards.append(("old-scroll", active["old-scroll"] * 10))
                     if race["duration"] > 8 * 60:
                         rewards.append(("watch", active["watch"] * 50))
+                    winner = next((entry for entry in standings if entry["position"] == 1), None)
+                    if winner and winner.get("team", {}).get("id") == user["sponsored_team"]:
+                        rewards.append(("team-flag", active["team-flag"] * 20))
+                    if winner and winner.get("finish_time", race["duration"]) < 7 * 60 + 30:
+                        rewards.append(("grandfather-clock", active["grandfather-clock"] * 50))
                     rewards = [(item_id, amount) for item_id, amount in rewards if amount]
                     reward = sum(amount for _item_id, amount in rewards)
                     if reward:
@@ -509,7 +526,7 @@ class LocalAuth:
             active = self._active_item_counts(json.loads(row["inventory"]))
         return {
             "cost": 5 + max(0, base_cost - 5 - active["vegas-shark"] * 2),
-            "limit": MAX_BETS_PER_DRIVER + active["gun"],
+            "limit": MAX_BETS_PER_DRIVER + active["gun"] * 2,
         }
 
     def place_bet(self, user_id, season, race_number, driver_id, cost, driver_wins=None):
@@ -521,7 +538,7 @@ class LocalAuth:
             if user is None:
                 raise AuthError("Your session has expired")
             active = self._active_item_counts(json.loads(user["inventory"]))
-            limit = MAX_BETS_PER_DRIVER + active["gun"]
+            limit = MAX_BETS_PER_DRIVER + active["gun"] * 2
             bet = self.db.execute(
                 "SELECT quantity, settled FROM bets WHERE user_id=? AND season=? AND race_number=? AND driver_id=?",
                 (user_id, season, race_number, driver_id),
@@ -534,14 +551,15 @@ class LocalAuth:
                 raise AuthError(f"You need {cost} Coin for this bet")
             self.db.execute("UPDATE users SET coin = coin - ? WHERE id = ?", (cost, user_id))
             self.db.execute(
-                """INSERT INTO bets(user_id,season,race_number,driver_id,quantity,spent,sunglasses,lucky_tickets)
-                   VALUES(?,?,?,?,1,?,?,?)
+                """INSERT INTO bets(user_id,season,race_number,driver_id,quantity,spent,sunglasses,lucky_tickets,insurance)
+                   VALUES(?,?,?,?,1,?,?,?,?)
                    ON CONFLICT(user_id,season,race_number,driver_id)
                    DO UPDATE SET quantity=quantity+1, spent=spent+excluded.spent,
                      sunglasses=MAX(sunglasses,excluded.sunglasses),
-                     lucky_tickets=MAX(lucky_tickets,excluded.lucky_tickets)""",
+                     lucky_tickets=MAX(lucky_tickets,excluded.lucky_tickets),
+                     insurance=MAX(insurance,excluded.insurance)""",
                 (user_id, season, race_number, driver_id, cost,
-                 active["sunglasses"] if driver_wins == 0 else 0, active["lucky-ticket"]),
+                 active["sunglasses"] if driver_wins == 0 else 0, active["lucky-ticket"], active["insurance"]),
             )
             self._record_activity(
                 user_id, season, "bet_placed", -cost, race_number=race_number,
@@ -566,17 +584,21 @@ class LocalAuth:
         with self.lock, self.db:
             for race in races:
                 rows = self.db.execute(
-                    "SELECT user_id,driver_id,quantity,sunglasses,lucky_tickets FROM bets WHERE season=? AND race_number=? AND settled=0",
+                    "SELECT user_id,driver_id,quantity,sunglasses,lucky_tickets,insurance FROM bets WHERE season=? AND race_number=? AND settled=0",
                     (race["season"], race["race_number"]),
                 ).fetchall()
                 drivers_per_user = {}
                 for bet in rows:
                     drivers_per_user.setdefault(bet["user_id"], set()).add(bet["driver_id"])
                 for bet in rows:
+                    payout = 0
                     if bet["driver_id"] == race["winner"]:
                         payout = bet["quantity"] * BET_PAYOUT + bet["sunglasses"] * SUNGLASSES_BONUS
                         if len(drivers_per_user[bet["user_id"]]) == 1:
                             payout += bet["lucky_tickets"] * LUCKY_TICKET_BONUS
+                    if bet["driver_id"] in race.get("crashed_drivers", []):
+                        payout += bet["insurance"] * INSURANCE_BONUS
+                    if payout:
                         self.db.execute(
                             "UPDATE users SET coin = coin + ? WHERE id = ?",
                             (payout, bet["user_id"]),

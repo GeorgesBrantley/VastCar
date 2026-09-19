@@ -41,7 +41,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self.auth.settle_item_rewards(self.league.completed_item_races())
                 self.auth.settle_bet_rewards(self.league.completed_bet_races())
                 user = self.auth.session_user(self.headers.get("Cookie"))
-                value["bets"] = self.auth.bets_for_user(user["id"], value["next_races"]) if user else []
+                offered_races = [race for wave in value["next_waves"] for race in wave["races"]]
+                value["bets"] = self.auth.bets_for_user(user["id"], offered_races) if user else []
                 value["fan_activity"] = self.auth.activity_for_user(user["id"], value["season"]["number"]) if user else []
             elif url.path == "/api/drivers":
                 season = params.get("season", [None])[0]
@@ -161,12 +162,12 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 user = self.auth.session_user(self.headers.get("Cookie"))
                 if user is None:
-                    return self.send_json({"error": "Log in to help the pit crew"}, 401)
+                    return self.send_json({"error": "Log in to use Sponsor Help"}, 401)
                 payload = self.request_json()
                 feature = self.league.final_lap()
                 election = feature.get("election")
                 if not election or election["phase"] != "open" or payload.get("season") != election["season"]:
-                    return self.send_json({"error": "Pit crew entries are closed"}, 400)
+                    return self.send_json({"error": "Sponsor Help entries are closed"}, 400)
                 targets = (payload.get("target_a"), payload.get("target_b"))
                 if any(target is not None and target not in self.league.roster for target in targets):
                     return self.send_json({"error": "Choose a valid driver"}, 400)

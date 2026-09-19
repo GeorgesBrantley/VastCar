@@ -20,6 +20,7 @@ const easternStartTime = timestamp => new Date(timestamp * 1000).toLocaleString(
 const normalize = value => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const copyInventory = inventory => (inventory || []).map(stack => ({ ...stack }));
 let state = null;
+let selectedFutureWave = 0;
 let drivers = [];
 let teams = [];
 let driverSeasons = [];
@@ -49,7 +50,7 @@ let finalLap = null;
 let finalLapRequest = 0;
 
 const finalLapChoices = [
-  { id: "team-work", title: "Team Work" },
+  { id: "weather", title: "Weather" },
   { id: "advertising", title: "Advertising" },
   { id: "explosions", title: "Explosions" },
 ];
@@ -62,6 +63,8 @@ const pitCrewActions = [
   { id: "eye-exam", title: "Eye Exam", detail: "Give a driver Beautiful Vision and change their eye count.", targets: 1 },
   { id: "tune-down", title: "Tune Down", detail: "Give a driver’s car Unheard Frequency.", targets: 1 },
   { id: "reflective-paint", title: "Reflective Paint", detail: "Give a driver’s car the Shiny modifier.", targets: 1 },
+  { id: "double-agent", title: "Double Agent", detail: "Swap a driver’s team with a random other driver.", targets: 1 },
+  { id: "golden-child", title: "Golden Child", detail: "Give a driver +30 Luck and their teammates -10 Luck.", targets: 1 },
 ];
 
 const towerItems = [
@@ -71,10 +74,13 @@ const towerItems = [
   { id: "camera", name: "Camera", cost: 30, icon: "▣", effect: "Every time there is a crash, gain 10 Coin." },
   { id: "old-scroll", name: "Old Scroll", cost: 10, icon: "≋", effect: "Every time someone wins for the first time that season, gain 10 Coin." },
   { id: "watch", name: "Watch", cost: 10, icon: "◷", effect: "Gain 50 Coin when any race takes over 8 minutes." },
+  { id: "team-flag", name: "Team Flag", cost: 50, icon: "⚑", effect: "Gain 20 Coin when a driver on your sponsored team wins." },
+  { id: "grandfather-clock", name: "Grandfather Clock", cost: 10, icon: "◴", effect: "Gain 50 Coin when the winning time for a race is under 7:30." },
   { id: "vegas-shark", name: "Vegas Shark", cost: 50, icon: "♠", effect: "Decrease a racer's win surcharge by 2 Coin per active Shark." },
-  { id: "sunglasses", name: "Sunglasses", cost: 50, icon: "▰", effect: "Gain 1,000 bonus Coin per active pair when a zero-win pick wins." },
-  { id: "gun", name: "Gun", cost: 100, icon: "⌐", effect: "Increase the number of bets you can place per racer by 1." },
-  { id: "lucky-ticket", name: "Lucky Ticket", cost: 1, icon: "✦", effect: "Gain 5 bonus Coin per active ticket when you only back one driver in a race." },
+  { id: "sunglasses", name: "Sunglasses", cost: 50, icon: "▰", effect: "Gain 500 bonus Coin per active pair when a zero-win pick wins." },
+  { id: "gun", name: "Gun", cost: 100, icon: "⌐", effect: "Increase the number of bets you can place per racer by 2." },
+  { id: "lucky-ticket", name: "Lucky Ticket", cost: 1, icon: "✦", effect: "Gain 300 bonus Coin per active ticket when you only back one driver in a race." },
+  { id: "insurance", name: "Insurance", cost: 70, icon: "⊞", effect: "Gain 100 Coin if a car you bet on experiences a crash." },
 ];
 
 const activeItemQuantity = itemId => (currentUser?.inventory || []).filter(stack => stack.active && stack.item === itemId).reduce((total, stack) => total + stack.quantity, 0);
@@ -268,7 +274,7 @@ function nextRaceCard(race) {
       const bet = betFor(driver.driver_id);
       const quantity = bet?.quantity || 0;
       const cost = 5 + Math.max(0, driver.wins - activeItemQuantity("vegas-shark") * 2);
-      const limit = 10 + activeItemQuantity("gun");
+      const limit = 10 + activeItemQuantity("gun") * 2;
       const maxed = quantity >= limit;
       const short = currentUser && currentUser.coin < cost;
       const title = maxed ? `Maximum ${limit} bets placed` : `Place one bet for ${cost} Coin. A win pays 100 Coin before item bonuses.`;
@@ -291,13 +297,22 @@ function renderLive() {
   if (liveEyebrow) liveEyebrow.textContent = active.length ? "THE CIRCUIT IS ALIVE" : "";
   $("#wave-status").textContent = active.length ? "LIVE NOW" : "WAVE COMPLETE";
   $("#wave-number").textContent = state.wave ? `WAVE ${String(state.wave).padStart(3, "0")}` : `${state.season.name.toUpperCase()} SEASON`;
-  const next = state.next_races[0];
-  $("#next-wave-number").textContent = `${next ? `WAVE ${String(next.wave).padStart(3, "0")} · ` : ""}STARTS IN ${fmtTime(Math.max(0, Math.ceil(state.next_start - (Date.now() / 1000 + serverOffset))))}`;
+  const futureWaves = state.next_waves || [];
+  selectedFutureWave = Math.min(selectedFutureWave, Math.max(0, futureWaves.length - 1));
+  const selectedWave = futureWaves[selectedFutureWave];
+  $("#next-wave-number").textContent = selectedWave
+    ? `WAVE ${String(selectedWave.wave).padStart(3, "0")} · STARTS IN ${fmtTime(Math.max(0, Math.ceil(selectedWave.start - (Date.now() / 1000 + serverOffset))))}`
+    : "NO FUTURE WAVE";
+  const previousWaveButton = $("[data-wave-nav='previous']");
+  const nextWaveButton = $("[data-wave-nav='next']");
+  if (previousWaveButton) previousWaveButton.disabled = selectedFutureWave === 0;
+  if (nextWaveButton) nextWaveButton.disabled = selectedFutureWave >= futureWaves.length - 1;
   $("#betting-coin-value").textContent = Number(currentUser?.coin || 0).toLocaleString();
   const nextGrid = $("#next-race-grid");
-  const nextSignature = `${state.wave}:${state.completed_races}:${state.next_start}:${currentUser?.coin ?? "guest"}:${currentUser?.sponsored_team || "none"}:${JSON.stringify(state.bets || [])}`;
+  const selectedRaces = selectedWave?.races || [];
+  const nextSignature = `${state.wave}:${selectedFutureWave}:${selectedWave?.start || "none"}:${state.completed_races}:${currentUser?.coin ?? "guest"}:${currentUser?.sponsored_team || "none"}:${JSON.stringify(state.bets || [])}`;
   if (nextGrid.dataset.signature !== nextSignature) {
-    nextGrid.innerHTML = state.next_races.map(nextRaceCard).join("");
+    nextGrid.innerHTML = selectedRaces.length ? selectedRaces.map(nextRaceCard).join("") : emptyState("The grid is not public yet.", "Championship entries appear when the preceding round has decided them.");
     nextGrid.dataset.signature = nextSignature;
   }
   for (const race of state.races) {
@@ -387,7 +402,7 @@ function renderDrivers() {
     <div class="driver-card-top"><span class="driver-number">NO. ${driver.number}</span><span class="win-badge"><b>${String(driver.wins).padStart(2, "0")}</b> WINS</span></div><div class="driver-card-name">${escapeHTML(driver.name)}${favoriteHeart(driver.id)}</div><p class="driver-hometown">${driver.fans || 0} Fans <span class="divider-dot">|</span> ${driver.starts} Starts</p>
     <div class="car-art">${carSVG(driver.color, driver.number)}</div><p class="car-name">“${escapeHTML(driver.car.name)}”</p>
     <div class="compact-stats">${driver.attributes.map(attr => `<div class="compact-stat"><span>${escapeHTML(attr.name)}</span><b>${attr.value}</b></div>`).join("")}</div>
-    <div class="card-bottom"><span>${driver.team.flag} ${escapeHTML(driver.team.abbreviation)} · DRIVER + MACHINE</span><span>OPEN FILE ↗</span></div></button>`;
+    <div class="card-bottom"><span>${driver.team.flag} ${escapeHTML(driver.team.abbreviation)}</span><span>OPEN FILE ↗</span></div></button>`;
   if (driverView === "teams") {
     const visible = teams.filter(team => {
       const members = team.drivers.map(id => drivers.find(driver => driver.id === id)).filter(Boolean);
@@ -860,15 +875,15 @@ function electionMarkup(election) {
   const disabled = !currentUser || !!selected;
   const driverOptions = (election.drivers || []).map(driver => `<option value="${driver.id}">№ ${driver.number} · ${escapeHTML(driver.name)}</option>`).join("");
   return `<section class="election-window">
-    <div class="election-intro"><p class="eyebrow">VOTING OPEN · CLOSES ${escapeHTML(easternStartTime(election.closes_at).toUpperCase())}</p><div class="election-title">The Administration is listening.</div><p>Two distinct ballots. Amendment votes are permanent once cast. Pit crew entries cost 10 Coin each.</p></div>
+    <div class="election-intro"><p class="eyebrow">VOTING OPEN · CLOSES ${escapeHTML(easternStartTime(election.closes_at).toUpperCase())}</p><div class="election-title">The Administration is listening.</div><p>Two distinct ballots. Amendment votes are permanent once cast. Sponsor Help entries cost 10 Coin each.</p></div>
     <div class="election-group"><div class="election-group-head"><div><span>01 / VASTCAR AMENDMENTS</span><strong>The Administration wants your opinion on the future of VastCar</strong></div><small>ONE LOCKED VOTE</small></div>
       <div class="amendment-options">${finalLapChoices.map(choice => `<button type="button" class="amendment-option ${selected === choice.id ? "selected" : ""}" data-final-lap-vote="${choice.id}" ${disabled ? "disabled" : ""} aria-pressed="${selected === choice.id}"><span>${escapeHTML(choice.title)}</span><i>${selected === choice.id ? "VOTE LOCKED" : "SELECT"}</i></button>`).join("")}</div>
       <p id="final-lap-vote-status" class="election-status" role="status" aria-live="polite">${selected ? "Your amendment vote is locked in." : currentUser ? "Choose carefully. This vote cannot be changed." : "Log in to cast an amendment vote."}</p>
     </div>
-    <div class="election-group"><div class="election-group-head"><div><span>02 / PIT CREW HELP</span><strong>Lend your support or disgust to our Eternal Racers</strong></div><small>10 COIN / ENTRY</small></div>
+    <div class="election-group"><div class="election-group-head"><div><span>02 / SPONSOR HELP</span><strong>Lend your support or disgust to our Eternal Racers</strong></div><small>10 COIN / ENTRY</small></div>
       <p class="pit-explanation">Every purchase adds one raffle entry. The Administration draws up to ten unique changes when voting closes; duplicate drawn choices are discarded.</p>
       <div class="pit-action-grid">${pitCrewActions.map(action => `<div class="pit-action" data-pit-action-card="${action.id}"><div><b>${escapeHTML(action.title)}</b><p>${escapeHTML(action.detail)}</p></div><label>DRIVER<select data-pit-target-a>${driverOptions}</select></label>${action.targets === 2 ? `<label>SECOND DRIVER<select data-pit-target-b>${driverOptions}</select></label>` : ""}<button type="button" data-buy-pit-entry="${action.id}" ${!currentUser ? "disabled" : ""}>ADD ENTRY · 10 COIN</button></div>`).join("")}</div>
-      <p id="pit-crew-status" class="election-status" role="status" aria-live="polite">${currentUser ? `${election.pit_crew.mine} of your entries · ${currentUser.coin} Coin available` : "Log in to buy pit crew entries."}</p>
+      <p id="pit-crew-status" class="election-status" role="status" aria-live="polite">${currentUser ? `${election.pit_crew.mine} of your entries · ${currentUser.coin} Coin available` : "Log in to buy Sponsor Help entries."}</p>
     </div>
   </section>`;
 }
@@ -879,7 +894,7 @@ function electionResultsMarkup(election) {
   const actionName = id => pitCrewActions.find(action => action.id === id)?.title || id;
   return `<section class="election-window election-results"><div class="election-intro"><p class="eyebrow">VOTING CLOSED · SEASON ${String(election.season).padStart(2, "0")}</p><div class="election-title">The results are in.</div><p>The Final Lap will lock Tuesday. The next election is revealed Thursday.</p></div>
     <div class="election-group"><div class="election-group-head"><div><span>01 / VASTCAR AMENDMENTS</span><strong>Final vote</strong></div><small>${total} ${total === 1 ? "VOTE" : "VOTES"}</small></div><div class="result-list">${finalLapChoices.map(choice => { const votes = result.amendments[choice.id] || 0; return `<div><b>${escapeHTML(choice.title)}</b><span>${votes} · ${total ? Math.round(votes / total * 100) : 0}%</span></div>`; }).join("")}</div></div>
-    <div class="election-group"><div class="election-group-head"><div><span>02 / PIT CREW HELP</span><strong>Changes selected by raffle</strong></div><small>${result.pit_crew.length} SELECTED</small></div><div class="pit-results">${result.pit_crew.length ? result.pit_crew.map((outcome, index) => `<div><span>${String(index + 1).padStart(2, "0")}</span><b>${escapeHTML(actionName(outcome.action))}</b><p>${escapeHTML(outcome.target_a_name)}${outcome.target_b_name ? ` ↔ ${escapeHTML(outcome.target_b_name)}` : ""}</p></div>`).join("") : "<p>No pit crew changes were entered.</p>"}</div></div>
+    <div class="election-group"><div class="election-group-head"><div><span>02 / SPONSOR HELP</span><strong>Changes selected by raffle</strong></div><small>${result.pit_crew.length} SELECTED</small></div><div class="pit-results">${result.pit_crew.length ? result.pit_crew.map((outcome, index) => `<div><span>${String(index + 1).padStart(2, "0")}</span><b>${escapeHTML(actionName(outcome.action))}</b><p>${escapeHTML(outcome.target_a_name)}${outcome.target_b_name ? ` ↔ ${escapeHTML(outcome.target_b_name)}` : ""}</p></div>`).join("") : "<p>No Sponsor Help changes were entered.</p>"}</div></div>
   </section>`;
 }
 
@@ -1002,9 +1017,15 @@ document.addEventListener("click", event => {
   const saveInventory = event.target.closest("[data-save-inventory]");
   const fanMove = event.target.closest("[data-fan-move]");
   const bet = event.target.closest("[data-place-bet]");
+  const waveNav = event.target.closest("[data-wave-nav]");
   const eternalsTab = event.target.closest("[data-eternals-view]");
   const finalLapVote = event.target.closest("[data-final-lap-vote]");
   const pitCrewEntry = event.target.closest("[data-buy-pit-entry]");
+  if (waveNav && state?.next_waves?.length) {
+    selectedFutureWave += waveNav.dataset.waveNav === "next" ? 1 : -1;
+    selectedFutureWave = Math.max(0, Math.min(selectedFutureWave, state.next_waves.length - 1));
+    renderLive();
+  }
   if (finalLapVote && !finalLapVote.disabled) castFinalLapVote(finalLapVote);
   if (pitCrewEntry && !pitCrewEntry.disabled) buyPitCrewEntry(pitCrewEntry);
   if (eternalsTab) {

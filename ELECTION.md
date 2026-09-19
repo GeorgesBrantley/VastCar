@@ -24,12 +24,12 @@ Three Options, Everyone gets one Vote. Locked in after Vote.
 
 The options are vague on person, do not elaborate.
 Current Options:
-- Team Work
+- Weather
 - Advertising
 - Explosions
 
 
-### Pit Crew Help
+### Sponsor Help
 "Lend your support or disgust to our Eternal Racers"
 
 Users buy these options for 10 coint a pop. Each 'bought' instance is a raffle added to the final selection. The Administration will chose 10 of these changes by raffle, but duplicate choices will be ignored
@@ -60,7 +60,14 @@ Feel free to use a modal to help with selection.
 - Reflective Paint
     - Driver's Car gains 'Shiny' Modifer
 
+- Double Agent
+    - Driver swaps Teams with a random other driver (Select one Driver)
 
-#### Pit crew Effects
+- Golden Child
+    - Driver's Tema Mates -10 Luck, Driver gets +30 Luck (Select one Driver)
+
+
+
+#### Sponsor Help Effects
 
 These occur the moment the election is done. Their results of the random selection are displayed for everyone to see on the Final Lap.

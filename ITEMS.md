@@ -38,6 +38,16 @@ Effect: Everytime someone wins for the first time that season, gain 10 Coin
 Cost: 10 Coin
 Effect: Gain 50 coins when any race takes over 8 minutes.
 
+#### Team Flag
+Cost: 50 Coin
+Effect: Gain 20 coins When a Driver on a team you sponsor wins
+
+#### Grandfather Clock
+Cost: 10 Coin
+Effect: Gain 50 coins when the winning time for a race is under 7:30.
+
+
+
 ### Betting Items
 
 #### Vegas Shark
@@ -46,12 +56,16 @@ Effect: Each Vegas Shark decreases the winning penalty for bets by 2 (minimum 0)
 
 #### Sunglasses
 Cost: 50 Coin
-Effect: When you bet on a racer with 0 wins, if they win you get 1000 bonus Coin.
+Effect: When you bet on a racer with 0 wins, if they win you get 500 bonus Coin.
 
 #### Gun
 Cost: 100 Coin
-Effect: Increase the amount you can bet per Racer by 1 bet
+Effect: Increase the amount you can bet per Racer by 2 bets
 
 #### Lucky ticket
 Cost: 1 Coin
-Effect: If you only bet on one driver in a race, Payout is +5
+Effect: If you only bet on one driver in a race, Payout is +300
+
+#### Insurance
+Cost: 70 Coin
+Effect: If a Car you bet on expereinces a crash, gain +100
