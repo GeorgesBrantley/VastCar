@@ -67,7 +67,7 @@ MODIFIERS = {
     "unheard-frequency": {"name": "Unheard Frequency", "description": "Car loses 30 Horsepower, gains 10 Ghostpower, and gains 10 Veil.", "implementation": "unheard-frequency"},
     "shiny": {"name": "Shiny", "description": "Car loses 50 Rust and gains 50 Hauntings.", "implementation": "shiny"},
 }
-ROSTER_VERSION = 4
+ROSTER_VERSION = 5
 NAMES = [
     ("Juno Static", "Saint Elsewhere"), ("Milo Afterhours", "The Debt Collector"),
     ("Velvet Okafor", "Soft Apocalypse"), ("Cassette Lee", "Side B"),
@@ -86,6 +86,19 @@ NAMES = [
     ("Marisol Finch", "Lucky Teeth"), ("Robin Reverse", "Return to Sender"),
 ]
 COLORS = ["#eaff7b", "#bba6ff", "#ff9a76", "#8ce3d1", "#f8a6ce", "#8fbbff", "#f4cf85", "#a2caa0", "#e8b1ef", "#d3d9df"]
+TEAMS = [
+    {"id": "usa", "name": "United States of America", "abbreviation": "USA", "flag": "🇺🇸", "color": "#5fa8ff"},
+    {"id": "ussr", "name": "Union of Soviet Socialist Republics", "abbreviation": "USSR", "flag": "☭", "color": "#ff4b4b"},
+    {"id": "rome", "name": "Imperial Rome", "abbreviation": "ROME", "flag": "🦅", "color": "#d9ad54"},
+    {"id": "mongol", "name": "Mongolian Empire", "abbreviation": "MGL", "flag": "🐎", "color": "#8dd4a8"},
+    {"id": "brazil", "name": "Brazil", "abbreviation": "BRA", "flag": "🇧🇷", "color": "#63d56b"},
+    {"id": "argentina", "name": "Argentina", "abbreviation": "ARG", "flag": "🇦🇷", "color": "#80cfff"},
+    {"id": "africa", "name": "Pan-African Union", "abbreviation": "PAU", "flag": "🌍", "color": "#f1b84b"},
+    {"id": "new-zealand", "name": "New Zealand", "abbreviation": "NZ", "flag": "🇳🇿", "color": "#a99cff"},
+    {"id": "future-japan", "name": "Future Japan", "abbreviation": "JPN-X", "flag": "🇯🇵", "color": "#ff8eb5"},
+    {"id": "napoleonic", "name": "Napoleonic Empire", "abbreviation": "NPE", "flag": "🇫🇷", "color": "#7e8fff"},
+]
+TEAM_BY_ID = {team["id"]: team for team in TEAMS}
 WEATHER = ["Dry / mostly real", "Low-flying déjà vu", "Scattered omens", "Light existential drizzle", "Clear / probably", "A familiar headwind"]
 
 
@@ -219,7 +232,7 @@ def make_roster():
     rng = random.Random(19880417)
     force_rng = random.Random(19880418)
     force_outliers = set(force_rng.sample(range(len(NAMES)), int(len(NAMES) * .15 + .5)))
-    return [{
+    roster = [{
         "id": i + 1, "number": f"{i + 1:02d}", "name": name,
         "color": COLORS[i % len(COLORS)], "hometown": CITIES[i % 5]["name"],
         "modifiers": [],
@@ -227,6 +240,20 @@ def make_roster():
         "car": {"name": car, "modifiers": [],
                 "attributes": attributes(rng, CAR_ATTRIBUTES, i in force_outliers)},
     } for i, (name, car) in enumerate(NAMES)]
+    # Every nation gets one driver from each strength tier. The seeded shuffles
+    # keep the draw feeling organic while making affiliations stable forever.
+    ranked = sorted(roster, key=lambda driver: (
+        -sum(group["value"] for group in driver["attributes"] + driver["car"]["attributes"]),
+        driver["id"],
+    ))
+    team_rng = random.Random(19681012)
+    tiers = [ranked[index:index + len(TEAMS)] for index in range(0, len(ranked), len(TEAMS))]
+    for tier in tiers:
+        team_rng.shuffle(tier)
+    for team_index, team in enumerate(TEAMS):
+        for tier in tiers:
+            tier[team_index]["team_id"] = team["id"]
+    return roster
 
 
 def stat_map(driver, effective=True):
@@ -260,6 +287,7 @@ def migrate_driver(driver, template):
     }
     result = {
         **driver,
+        "team_id": driver.get("team_id", template["team_id"]),
         "modifiers": driver.get("modifiers", []),
         "attributes": [],
         "car": {**driver["car"], "modifiers": driver["car"].get("modifiers", []), "attributes": []},
@@ -409,8 +437,16 @@ class League:
             "number": self.roster[driver_id]["number"],
             "name": self.roster[driver_id]["name"],
             "color": self.roster[driver_id]["color"],
+            "team": self._driver_team(self.roster[driver_id]),
             "wins": wins.get(driver_id, 0),
         } for driver_id in driver_ids]
+
+    @staticmethod
+    def _team_public(team):
+        return {key: team[key] for key in ("id", "name", "abbreviation", "flag", "color")}
+
+    def _driver_team(self, driver):
+        return self._team_public(TEAM_BY_ID[driver["team_id"]])
 
     def _make_wave(self, season_number, season_slot):
         day, minute, race_count = SEASON_SCHEDULE[season_slot]
@@ -591,6 +627,7 @@ class League:
             driver = self.roster[plan["driver_id"]]
             standings.append({"driver_id": driver["id"], "name": driver["name"], "number": driver["number"],
                               "car": driver["car"]["name"], "color": driver["color"], "grid": plan["grid"],
+                              "team": self._driver_team(driver),
                               "laps": laps, "progress": round(progress, 5), "distance": round(progress * data["city"]["length"], 2),
                               "finished": laps == LAPS, "finish_time": splits[-1] if laps == LAPS else None,
                               "last_lap": round(splits[laps - 1] - (splits[laps - 2] if laps > 1 else 0), 3) if laps else None})
@@ -692,6 +729,8 @@ class League:
                 "winner": {key: driver[key] for key in ("id", "name", "number", "color")},
                 "wins": wins,
             }
+            teams = self.teams(row["season"])
+            result["team_champion"] = teams[0] if teams else None
             local_now = datetime.fromtimestamp(now, EASTERN)
             reveal_date = local_now.date() - timedelta(days=(local_now.weekday() - 3) % 7)
             reveal = datetime.combine(reveal_date, datetime_time(), EASTERN).timestamp()
@@ -842,6 +881,7 @@ class League:
                     "winner": {key: records[finishers[0]][key] for key in ("id", "name", "number", "color")},
                     "second": {key: records[finishers[1]][key] for key in ("id", "name", "number", "color")},
                     "third": {key: records[finishers[2]][key] for key in ("id", "name", "number", "color")},
+                    "team_champion": self.teams(row["season"])[0],
                 })
 
             current_season = season_number_for(self.season_zero_date, self.clock())
@@ -854,6 +894,7 @@ class League:
                     "winner": None,
                     "second": None,
                     "third": None,
+                    "team_champion": None,
                 })
 
             drivers = []
@@ -876,7 +917,15 @@ class League:
                 -record["finalist_appearances"],
                 record["name"],
             ))
-            return {"drivers": drivers, "seasons": seasons}
+            team_records = [{**self._team_public(team), "drivers": [
+                {key: driver[key] for key in ("id", "name", "number", "color")}
+                for driver in self.roster.values() if driver["team_id"] == team["id"]
+            ], "championship_wins": sum(
+                season.get("team_champion", {}).get("id") == team["id"]
+                for season in seasons if season.get("team_champion")
+            )} for team in TEAMS]
+            team_records.sort(key=lambda team: (-team["championship_wins"], team["name"]))
+            return {"teams": team_records, "drivers": drivers, "seasons": seasons}
 
     def drivers(self, season=None):
         with self.lock:
@@ -889,7 +938,32 @@ class League:
             for row in self.db.execute("SELECT data FROM races WHERE season=?", (selected,)):
                 for plan in json.loads(row["data"])["plans"]:
                     starts[plan["driver_id"]] += 1
-            return [{**d, "wins": wins.get(d["id"], 0), "starts": starts.get(d["id"], 0)} for d in self.roster.values()]
+            return [{**d, "team": self._driver_team(d), "wins": wins.get(d["id"], 0), "starts": starts.get(d["id"], 0)} for d in self.roster.values()]
+
+    def teams(self, season=None, sponsor_counts=None):
+        """Return the ten nations with race points and their current drivers."""
+        with self.lock:
+            current = season_number_for(self.season_zero_date, self.clock())
+            selected = current if season is None else max(1, min(int(season), current))
+            points = {team["id"]: 0 for team in TEAMS}
+            rows = self.db.execute(
+                "SELECT * FROM races WHERE completed=1 AND season=? ORDER BY season_slot,lane", (selected,)
+            ).fetchall()
+            for row in rows:
+                scale = (6, 4, 2) if row["season_slot"] >= CHAMPIONSHIP_R1_SLOT else (3, 2, 1)
+                for driver_id, score in zip(self._planned_finishers(row)[:3], scale):
+                    points[self.roster[driver_id]["team_id"]] += score
+            sponsor_counts = sponsor_counts or {}
+            result = []
+            for team in TEAMS:
+                result.append({
+                    **self._team_public(team),
+                    "points": points[team["id"]],
+                    "sponsors": sponsor_counts.get(team["id"], 0),
+                    "drivers": [driver["id"] for driver in self.roster.values() if driver["team_id"] == team["id"]],
+                })
+            result.sort(key=lambda team: (-team["points"], team["name"]))
+            return result
 
     def history(self, page=1, query="", city="", season=None):
         with self.lock:

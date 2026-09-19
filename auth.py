@@ -16,6 +16,7 @@ from http.cookies import SimpleCookie
 SESSION_COOKIE = "vastcar_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
 FAVORITE_CHANGE_INTERVAL_SECONDS = 60 * 60 * 24
+SPONSOR_CHANGE_INTERVAL_SECONDS = 60 * 60 * 24 * 7
 PASSWORD_N = 2 ** 14
 PASSWORD_R = 8
 PASSWORD_P = 1
@@ -94,6 +95,10 @@ class LocalAuth:
                 self.db.execute("ALTER TABLE users ADD COLUMN fav_racer_changed_at INTEGER")
             if "last_daily_claim_day" not in columns:
                 self.db.execute("ALTER TABLE users ADD COLUMN last_daily_claim_day INTEGER")
+            if "sponsored_team" not in columns:
+                self.db.execute("ALTER TABLE users ADD COLUMN sponsored_team TEXT")
+            if "sponsored_team_changed_at" not in columns:
+                self.db.execute("ALTER TABLE users ADD COLUMN sponsored_team_changed_at INTEGER")
             self.db.execute("""
                 CREATE TABLE IF NOT EXISTS item_reward_races (
                     user_id INTEGER NOT NULL,
@@ -252,6 +257,42 @@ class LocalAuth:
                 "SELECT fav_racer, COUNT(*) AS fans FROM users WHERE fav_racer IS NOT NULL GROUP BY fav_racer"
             )
             return {row["fav_racer"]: row["fans"] for row in rows}
+
+    def set_sponsored_team(self, user_id, team_id):
+        """Save one sponsored nation, allowing one selection or change per week."""
+        if not isinstance(user_id, int) or not isinstance(team_id, str):
+            raise AuthError("Choose a valid team")
+        now = int(self.clock())
+        with self.lock, self.db:
+            row = self.db.execute(
+                "SELECT sponsored_team_changed_at FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if row is None:
+                raise AuthError("Your session has expired")
+            changed_at = row["sponsored_team_changed_at"]
+            if changed_at is not None and now < changed_at + SPONSOR_CHANGE_INTERVAL_SECONDS:
+                raise AuthError("Your sponsored team can be changed once every week")
+            self.db.execute(
+                "UPDATE users SET sponsored_team=?, sponsored_team_changed_at=? WHERE id=?",
+                (team_id, now, user_id),
+            )
+            return self._user_by_id(user_id)
+
+    def sponsor_change_available_at(self, user_id):
+        with self.lock:
+            row = self.db.execute(
+                "SELECT sponsored_team_changed_at FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+        if row is None or row["sponsored_team_changed_at"] is None:
+            return None
+        return row["sponsored_team_changed_at"] + SPONSOR_CHANGE_INTERVAL_SECONDS
+
+    def sponsor_counts(self):
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT sponsored_team, COUNT(*) AS sponsors FROM users WHERE sponsored_team IS NOT NULL GROUP BY sponsored_team"
+            )
+            return {row["sponsored_team"]: row["sponsors"] for row in rows}
 
     def final_lap_poll(self, season, user_id=None):
         with self.lock:
@@ -664,7 +705,8 @@ class LocalAuth:
     def _public_user(row):
         return {
             "id": row["id"], "username": row["username"], "admin": bool(row["is_admin"]),
-            "coin": row["coin"], "fav_racer": row["fav_racer"], "inventory": json.loads(row["inventory"]),
+            "coin": row["coin"], "fav_racer": row["fav_racer"], "sponsored_team": row["sponsored_team"],
+            "inventory": json.loads(row["inventory"]),
         }
 
     @staticmethod

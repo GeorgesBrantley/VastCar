@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from auth import AuthError, LocalAuth
-from league import League
+from league import League, TEAM_BY_ID
 
 ROOT = Path(__file__).resolve().parent
 
@@ -34,7 +34,8 @@ class Handler(SimpleHTTPRequestHandler):
             if url.path == "/api/auth/me":
                 user = self.auth.session_user(self.headers.get("Cookie"))
                 value = {"user": user,
-                         "favorite_change_available_at": self.auth.favorite_change_available_at(user["id"]) if user else None}
+                         "favorite_change_available_at": self.auth.favorite_change_available_at(user["id"]) if user else None,
+                         "sponsor_change_available_at": self.auth.sponsor_change_available_at(user["id"]) if user else None}
             elif url.path == "/api/state":
                 value = self.league.state()
                 self.auth.settle_item_rewards(self.league.completed_item_races())
@@ -47,6 +48,7 @@ class Handler(SimpleHTTPRequestHandler):
                 selected = int(season) if season else None
                 favorite_counts = self.auth.favorite_counts()
                 value = {"drivers": [{**driver, "fans": favorite_counts.get(driver["id"], 0)} for driver in self.league.drivers(selected)],
+                         "teams": self.league.teams(selected, self.auth.sponsor_counts()),
                          "seasons": self.league.seasons()}
             elif url.path == "/api/history":
                 value = self.league.history(int(params.get("page", [1])[0]), params.get("q", [""])[0][:200], params.get("city", [""])[0])
@@ -59,6 +61,8 @@ class Handler(SimpleHTTPRequestHandler):
                 user = self.auth.session_user(self.headers.get("Cookie"))
                 if value["winner"]:
                     value["winner"]["fans"] = self.auth.favorite_counts().get(value["winner"]["id"], 0)
+                if value.get("team_champion"):
+                    value["team_champion"]["sponsors"] = self.auth.sponsor_counts().get(value["team_champion"]["id"], 0)
                 election = value.get("election")
                 if election:
                     season = election["season"]
@@ -116,6 +120,22 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": "Choose a valid driver"}, 400)
                 user = self.auth.set_favorite_racer(user["id"], racer_id)
                 self.send_json({"user": user, "favorite_change_available_at": self.auth.favorite_change_available_at(user["id"])})
+            except AuthError as error:
+                self.send_json({"error": str(error)}, 400)
+            except ValueError:
+                self.send_json({"error": "Invalid request"}, 400)
+            return
+        if path == "/api/fan/sponsor":
+            try:
+                user = self.auth.session_user(self.headers.get("Cookie"))
+                if user is None:
+                    return self.send_json({"error": "Log in to sponsor a team"}, 401)
+                payload = self.request_json()
+                team_id = payload.get("team_id")
+                if not isinstance(team_id, str) or team_id not in TEAM_BY_ID:
+                    return self.send_json({"error": "Choose a valid team"}, 400)
+                user = self.auth.set_sponsored_team(user["id"], team_id)
+                self.send_json({"user": user, "sponsor_change_available_at": self.auth.sponsor_change_available_at(user["id"])})
             except AuthError as error:
                 self.send_json({"error": str(error)}, 400)
             except ValueError:

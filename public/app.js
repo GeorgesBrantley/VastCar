@@ -21,8 +21,10 @@ const normalize = value => value.normalize("NFD").replace(/[\u0300-\u036f]/g, ""
 const copyInventory = inventory => (inventory || []).map(stack => ({ ...stack }));
 let state = null;
 let drivers = [];
+let teams = [];
 let driverSeasons = [];
 let selectedDriverSeason = "";
+let driverView = "teams";
 let tracks = [];
 let page = "live";
 let serverOffset = 0;
@@ -34,13 +36,14 @@ let completedCount = -1;
 let historyTimer;
 let currentUser = null;
 let favoriteChangeAvailableAt = null;
+let sponsorChangeAvailableAt = null;
 let authMode = "login";
 let inventoryDraft = null;
 let draggedStackId = null;
 let draggedFanStackId = null;
 let fanActivity = [];
 let eternals = null;
-let eternalsView = "drivers";
+let eternalsView = "teams";
 let eternalsRequest = 0;
 let finalLap = null;
 let finalLapRequest = 0;
@@ -112,6 +115,7 @@ async function loadAccount() {
       if (["fan", "tower", "eternals"].includes(page)) location.hash = "#live";
     }
     favoriteChangeAvailableAt = data.favorite_change_available_at;
+    sponsorChangeAvailableAt = data.sponsor_change_available_at;
     if (state) renderLive();
     if (page === "drivers" && drivers.length) renderDrivers();
     if (page === "fan") renderFanPage();
@@ -182,6 +186,15 @@ function favoriteHeart(driverId) {
   return isFavorite(driverId) ? '<span class="favorite-heart" role="img" aria-label="Favorite driver">❤️</span>' : "";
 }
 
+function isSponsored(teamId) {
+  return currentUser && currentUser.sponsored_team === teamId;
+}
+
+function teamBadge(team) {
+  if (!team) return "";
+  return `<span class="team-abbreviation ${isSponsored(team.id) ? "sponsored" : ""}" style="--team-color:${team.color}" title="${escapeHTML(team.name)}${isSponsored(team.id) ? " · Your sponsored team" : ""}">(${escapeHTML(team.abbreviation)})</span>`;
+}
+
 function trackMarkup(race, detail = false) {
   return `<div class="track-wrap ${detail ? "detail-track" : ""}">
     <svg class="track-svg" viewBox="0 0 360 180" role="img" aria-label="Live track positions for ${escapeHTML(race.name)}">
@@ -203,7 +216,7 @@ function standingsMarkup(race, detail = false) {
 
 function standingsRows(race, detail = false) {
   return race.standings.map(driver => `<li class="standing" style="--driver-color:${driver.color}" aria-label="Position ${driver.position}, ${escapeHTML(driver.name)}, ${driver.laps} laps completed, ${driver.distance} kilometers">
-    <span class="position">${String(driver.position).padStart(2, "0")}</span><span class="standing-number">${String(driver.number).padStart(2, "0")}</span><span class="standing-driver"><i class="driver-color"></i><span class="standing-name">${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)}</span></span>
+    <span class="position">${String(driver.position).padStart(2, "0")}</span><span class="standing-number">${String(driver.number).padStart(2, "0")}</span><span class="standing-driver"><i class="driver-color"></i><span class="standing-name">${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}</span></span>
     <span class="standing-progress">${detail ? driver.distance.toFixed(1) : `${driver.laps}<span class="tiny-progress"><i style="width:${driver.progress * 10}%"></i></span>`}</span>
     <span class="standing-gap">${driver.position === 1 ? (driver.finished ? "WINNER" : "LEADER") : `+${driver.gap.toFixed(1)}`}</span></li>`).join("");
 }
@@ -259,7 +272,7 @@ function nextRaceCard(race) {
       const maxed = quantity >= limit;
       const short = currentUser && currentUser.coin < cost;
       const title = maxed ? `Maximum ${limit} bets placed` : `Place one bet for ${cost} Coin. A win pays 100 Coin before item bonuses.`;
-      return `<li style="--driver-color:${driver.color}"><span class="next-racer-number">${driver.number}</span><span class="next-racer-name"><i class="driver-color"></i><span>${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)}${quantity ? '<span class="driver-bet-coin" role="img" aria-label="Bet placed">🪙</span>' : ""}</span></span><span class="next-racer-wins">${String(driver.wins).padStart(2, "0")}</span><button class="bet-button" data-place-bet data-season="${race.season}" data-race-number="${race.race_number}" data-driver-id="${driver.driver_id}" title="${title}" aria-label="${title} ${quantity} of ${limit} bets placed." ${(maxed || short) ? "disabled" : ""}><span aria-hidden="true">🪙</span>${quantity ? `<b>${quantity}</b>` : ""}</button></li>`;
+      return `<li style="--driver-color:${driver.color}"><span class="next-racer-number">${driver.number}</span><span class="next-racer-name"><i class="driver-color"></i><span>${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}${quantity ? '<span class="driver-bet-coin" role="img" aria-label="Bet placed">🪙</span>' : ""}</span></span><span class="next-racer-wins">${String(driver.wins).padStart(2, "0")}</span><button class="bet-button" data-place-bet data-season="${race.season}" data-race-number="${race.race_number}" data-driver-id="${driver.driver_id}" title="${title}" aria-label="${title} ${quantity} of ${limit} bets placed." ${(maxed || short) ? "disabled" : ""}><span aria-hidden="true">🪙</span>${quantity ? `<b>${quantity}</b>` : ""}</button></li>`;
     }).join("")}</ol>
   </article>`;
 }
@@ -282,7 +295,7 @@ function renderLive() {
   $("#next-wave-number").textContent = `${next ? `WAVE ${String(next.wave).padStart(3, "0")} · ` : ""}STARTS IN ${fmtTime(Math.max(0, Math.ceil(state.next_start - (Date.now() / 1000 + serverOffset))))}`;
   $("#betting-coin-value").textContent = Number(currentUser?.coin || 0).toLocaleString();
   const nextGrid = $("#next-race-grid");
-  const nextSignature = `${state.wave}:${state.completed_races}:${state.next_start}:${currentUser?.coin ?? "guest"}:${JSON.stringify(state.bets || [])}`;
+  const nextSignature = `${state.wave}:${state.completed_races}:${state.next_start}:${currentUser?.coin ?? "guest"}:${currentUser?.sponsored_team || "none"}:${JSON.stringify(state.bets || [])}`;
   if (nextGrid.dataset.signature !== nextSignature) {
     nextGrid.innerHTML = state.next_races.map(nextRaceCard).join("");
     nextGrid.dataset.signature = nextSignature;
@@ -332,6 +345,7 @@ async function loadDrivers() {
     const params = selectedDriverSeason ? `?season=${encodeURIComponent(selectedDriverSeason)}` : "";
     const data = await api(`/api/drivers${params}`);
     drivers = data.drivers;
+    teams = data.teams || [];
     driverSeasons = data.seasons || [];
     syncDriverSeasonSelect();
     if (page === "drivers") renderDrivers();
@@ -356,15 +370,43 @@ function syncDriverSeasonSelect() {
 
 function renderDrivers() {
   const query = normalize($("#driver-search").value.trim());
+  $$('[data-driver-view]').forEach(button => {
+    const active = button.dataset.driverView === driverView;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  const teamOptions = '<option value="points">Most Points</option><option value="sponsors">Sponsor Count</option><option value="name">Name A–Z</option>';
+  const driverOptions = '<option value="wins">Most Wins</option><option value="fans">Fan Count</option><option value="number">Driver Number</option><option value="name">Name A–Z</option>';
+  const wantedOptions = driverView === "teams" ? teamOptions : driverOptions;
+  if ($("#driver-sort").dataset.view !== driverView) {
+    $("#driver-sort").innerHTML = wantedOptions;
+    $("#driver-sort").dataset.view = driverView;
+  }
   const sort = $("#driver-sort").value;
-  const filtered = drivers.filter(driver => normalize(`${driver.name} ${driver.car.name} ${driver.number}`).includes(query));
-  filtered.sort((a, b) => sort === "wins" ? b.wins - a.wins || a.id - b.id : sort === "fans" ? (b.fans || 0) - (a.fans || 0) || b.starts - a.starts || a.name.localeCompare(b.name) : sort === "name" ? a.name.localeCompare(b.name) : a.id - b.id);
-  $("#driver-count").textContent = `${filtered.length} / 30 DRIVERS`;
-  $("#driver-grid").innerHTML = filtered.length ? filtered.map(driver => `<button class="driver-card" data-driver="${driver.id}" style="--driver-color:${driver.color}" aria-label="View ${escapeHTML(driver.name)} and ${escapeHTML(driver.car.name)}, ${driver.wins} wins">
-    <div class="driver-card-top"><span class="driver-number">NO. ${driver.number}</span><span class="win-badge"><b>${String(driver.wins).padStart(2, "0")}</b> WINS</span></div><h2>${escapeHTML(driver.name)}${favoriteHeart(driver.id)}</h2><p class="driver-hometown">${driver.fans || 0} Fans <span class="divider-dot">|</span> ${driver.starts} Starts</p>
+  const driverCard = driver => `<button class="driver-card" data-driver="${driver.id}" style="--driver-color:${driver.color}" aria-label="View ${escapeHTML(driver.name)} and ${escapeHTML(driver.car.name)}, ${driver.wins} wins">
+    <div class="driver-card-top"><span class="driver-number">NO. ${driver.number}</span><span class="win-badge"><b>${String(driver.wins).padStart(2, "0")}</b> WINS</span></div><div class="driver-card-name">${escapeHTML(driver.name)}${favoriteHeart(driver.id)}</div><p class="driver-hometown">${driver.fans || 0} Fans <span class="divider-dot">|</span> ${driver.starts} Starts</p>
     <div class="car-art">${carSVG(driver.color, driver.number)}</div><p class="car-name">“${escapeHTML(driver.car.name)}”</p>
     <div class="compact-stats">${driver.attributes.map(attr => `<div class="compact-stat"><span>${escapeHTML(attr.name)}</span><b>${attr.value}</b></div>`).join("")}</div>
-    <div class="card-bottom"><span>DRIVER + MACHINE DOSSIER</span><span>OPEN FILE ↗</span></div></button>`).join("") : emptyState("Nobody by that name.", "Try another driver, car name, or racing number.");
+    <div class="card-bottom"><span>${driver.team.flag} ${escapeHTML(driver.team.abbreviation)} · DRIVER + MACHINE</span><span>OPEN FILE ↗</span></div></button>`;
+  if (driverView === "teams") {
+    const visible = teams.filter(team => {
+      const members = team.drivers.map(id => drivers.find(driver => driver.id === id)).filter(Boolean);
+      return normalize(`${team.name} ${team.abbreviation} ${members.map(driver => `${driver.name} ${driver.car.name} ${driver.number}`).join(" ")}`).includes(query);
+    });
+    visible.sort((a, b) => sort === "sponsors" ? b.sponsors - a.sponsors || b.points - a.points || a.name.localeCompare(b.name) : sort === "name" ? a.name.localeCompare(b.name) : b.points - a.points || a.name.localeCompare(b.name));
+    $("#driver-count").textContent = `${visible.length} / 10 TEAMS`;
+    $("#driver-grid").className = "driver-grid team-view-grid";
+    $("#driver-grid").innerHTML = visible.length ? visible.map(team => {
+      const members = team.drivers.map(id => drivers.find(driver => driver.id === id)).filter(Boolean);
+      return `<article class="team-bucket ${isSponsored(team.id) ? "sponsored" : ""}" style="--team-color:${team.color}"><div class="team-bucket-head"><div><span class="team-flag" aria-hidden="true">${team.flag}</span><div><span class="eyebrow">${isSponsored(team.id) ? "YOUR SPONSORED TEAM" : "NATIONAL TEAM"}</span><div class="team-bucket-title">${escapeHTML(team.name)} <b>${escapeHTML(team.abbreviation)}</b></div></div></div><div class="team-bucket-totals"><strong>${team.points}</strong><span>TEAM POINTS</span><small>${team.sponsors} ${team.sponsors === 1 ? "SPONSOR" : "SPONSORS"}</small></div></div><div class="team-driver-grid">${members.map(driverCard).join("")}</div></article>`;
+    }).join("") : emptyState("No team on that frequency.", "Try another nation, abbreviation, driver, or car.");
+    return;
+  }
+  const filtered = drivers.filter(driver => normalize(`${driver.name} ${driver.car.name} ${driver.number} ${driver.team.name} ${driver.team.abbreviation}`).includes(query));
+  filtered.sort((a, b) => sort === "wins" ? b.wins - a.wins || a.id - b.id : sort === "fans" ? (b.fans || 0) - (a.fans || 0) || b.starts - a.starts || a.name.localeCompare(b.name) : sort === "name" ? a.name.localeCompare(b.name) : a.id - b.id);
+  $("#driver-count").textContent = `${filtered.length} / 30 DRIVERS`;
+  $("#driver-grid").className = "driver-grid";
+  $("#driver-grid").innerHTML = filtered.length ? filtered.map(driverCard).join("") : emptyState("Nobody by that name.", "Try another driver, car name, team, or racing number.");
 }
 
 function trackCard(track) {
@@ -432,7 +474,7 @@ function openDriver(id) {
   dialogRequest++;
   $("#dialog-eyebrow").textContent = "DRIVER DOSSIER";
   $("#dialog-content").innerHTML = `<div style="--driver-color:${driver.color}">
-    <div class="profile-header"><div><h2 id="dialog-title" class="dialog-title">${escapeHTML(driver.name)}</h2><p class="dialog-subtitle">${escapeHTML(selectedSeason?.name || "Current")} season <span class="divider-dot">/</span> ${driver.wins} wins <span class="divider-dot">/</span> ${driver.starts} starts</p>${modifierMarkup(driver.modifiers)}</div><span class="profile-number">${driver.number}</span></div>
+    <div class="profile-header"><div><h2 id="dialog-title" class="dialog-title">${escapeHTML(driver.name)}</h2><p class="dialog-subtitle">${driver.team.flag} <span class="profile-team" style="--team-color:${driver.team.color}">${escapeHTML(driver.team.name)} (${escapeHTML(driver.team.abbreviation)})</span> <span class="divider-dot">/</span> ${escapeHTML(selectedSeason?.name || "Current")} season <span class="divider-dot">/</span> ${driver.wins} wins <span class="divider-dot">/</span> ${driver.starts} starts</p>${modifierMarkup(driver.modifiers)}</div><span class="profile-number">${driver.number}</span></div>
     <div class="profile-car">${carSVG(driver.color, driver.number)}<div><div class="eyebrow">THE MACHINE</div><h3>${escapeHTML(driver.car.name)}</h3>${modifierMarkup(driver.car.modifiers)}</div></div>
     <div class="stat-sections"><section class="stat-column"><h3>01 / DRIVER ATTRIBUTES</h3>${attributeMarkup(driver.attributes)}</section><section class="stat-column"><h3>02 / CAR ATTRIBUTES</h3>${attributeMarkup(driver.car.attributes)}</section></div></div>`;
   showDialog();
@@ -447,6 +489,11 @@ function favoriteChangeLabel() {
   return `Available again ${dateLabel(favoriteChangeAvailableAt)}`;
 }
 
+function sponsorChangeLabel() {
+  if (!sponsorChangeAvailableAt || sponsorChangeAvailableAt * 1000 <= Date.now()) return "Choose or change your sponsored team";
+  return `Available again ${dateLabel(sponsorChangeAvailableAt)}`;
+}
+
 function renderFanPage() {
   if (!currentUser) return;
   $("#fan-title").textContent = currentUser.username;
@@ -455,6 +502,8 @@ function renderFanPage() {
   const favoriteMarkup = favorite ? `<button class="fan-driver-card" data-open-favorite style="--driver-color:${favorite.color}" aria-label="Change favorite driver, currently ${escapeHTML(favorite.name)}">
       <div><span class="eyebrow">FAVORITE DRIVER</span><div class="fan-card-title">${escapeHTML(favorite.name)} ${favoriteHeart(favorite.id)}</div><p>“${escapeHTML(favorite.car.name)}”</p><small>${favoriteChangeLabel()}</small></div><div class="fan-car-art">${carSVG(favorite.color, favorite.number)}</div><span class="fan-change">CHANGE ↗</span>
     </button>` : `<button class="fan-driver-card fan-driver-empty" data-open-favorite><div><span class="eyebrow">FAVORITE DRIVER</span><div class="fan-card-title">No favorite yet</div><p>Choose a driver and their machine.</p></div><span class="fan-change">CHOOSE ↗</span></button>`;
+  const sponsored = teams.find(team => isSponsored(team.id));
+  const sponsorMarkup = sponsored ? `<button class="fan-driver-card fan-team-card" data-open-sponsor style="--team-color:${sponsored.color};--driver-color:${sponsored.color}" aria-label="Change sponsored team, currently ${escapeHTML(sponsored.name)}"><div><span class="eyebrow">SPONSORED TEAM</span><div class="fan-card-title"><span aria-hidden="true">${sponsored.flag}</span> ${escapeHTML(sponsored.name)}</div><p>${escapeHTML(sponsored.abbreviation)} · ${sponsored.sponsors} ${sponsored.sponsors === 1 ? "Sponsor" : "Sponsors"}</p><div class="fan-team-drivers">${sponsored.drivers.map(id => drivers.find(driver => driver.id === id)).filter(Boolean).map(driver => `<span><i style="--driver-color:${driver.color}"></i>${escapeHTML(driver.name)}</span>`).join("")}</div><small>${sponsorChangeLabel()}</small></div><span class="fan-change">CHANGE ↗</span></button>` : `<button class="fan-driver-card fan-driver-empty fan-team-card" data-open-sponsor><div><span class="eyebrow">SPONSORED TEAM</span><div class="fan-card-title">No team yet</div><p>Choose one nation to sponsor.</p></div><span class="fan-change">CHOOSE ↗</span></button>`;
   const inventory = currentUser.inventory || [];
   const slots = (active, limit) => Array.from({ length: limit }, (_, index) => {
     const stack = inventory.filter(entry => entry.active === active)[index];
@@ -474,7 +523,7 @@ function renderFanPage() {
   };
   const activityRows = fanActivity.map(entry => `<li class="fan-activity-row"><span class="fan-activity-kind ${entry.kind}">${entry.kind.startsWith("bet_") ? "BET" : "ITEM"}</span><span class="fan-activity-detail"><b>${activityLabel(entry)}</b><small>Race ${entry.race_number}${entry.quantity > 1 ? ` · ×${entry.quantity}` : ""} · ${dateLabel(entry.created_at)}</small></span><strong class="${entry.amount > 0 ? "positive" : entry.amount < 0 ? "negative" : "neutral"}">${entry.amount > 0 ? "+" : entry.amount < 0 ? "−" : ""}${Math.abs(entry.amount)} <small>COIN</small></strong></li>`).join("");
   const activityMarkup = `<section class="fan-activity"><div class="fan-activity-head"><div><span class="eyebrow">CURRENT SEASON</span><h2>Betting & payouts</h2></div><span>${fanActivity.length} ${fanActivity.length === 1 ? "ENTRY" : "ENTRIES"}</span></div>${activityRows ? `<ol class="fan-activity-list">${activityRows}</ol>` : `<div class="fan-activity-empty">Your bets and item payouts will be saved here for the current season.</div>`}</section>`;
-  $("#fan-content").innerHTML = `<div class="fan-layout"><section>${favoriteMarkup}</section><section class="fan-inventory"><div class="fan-inventory-head"><div class="fan-section-title">Active Inventory</div><span>${inventory.filter(entry => entry.active).length} / 3 SLOTS</span></div><div class="fan-slots">${slots(true, 3)}</div><p id="fan-inventory-message" class="fan-inventory-message" role="status">Only active items earn Coin. Use Move, or drag a stack onto another to swap.</p><a class="inventory-link" href="#tower">Buy equipment at The Tower ↗</a></section><section class="fan-inventory fan-stash"><div class="fan-inventory-head"><div class="fan-section-title">Stash</div><span>${inventory.filter(entry => !entry.active).length} / 5 SLOTS</span></div><div class="fan-slots">${slots(false, 5)}</div></section>${activityMarkup}</div>`;
+  $("#fan-content").innerHTML = `<div class="fan-layout"><section>${favoriteMarkup}</section><section>${sponsorMarkup}</section><section class="fan-inventory fan-inventory-active"><div class="fan-inventory-head"><div class="fan-section-title">Active Inventory</div><span>${inventory.filter(entry => entry.active).length} / 3 SLOTS</span></div><div class="fan-slots">${slots(true, 3)}</div><p id="fan-inventory-message" class="fan-inventory-message" role="status">Only active items earn Coin. Use Move, or drag a stack onto another to swap.</p><a class="inventory-link" href="#tower">Buy equipment at The Tower ↗</a></section><section class="fan-inventory fan-stash"><div class="fan-inventory-head"><div class="fan-section-title">Stash</div><span>${inventory.filter(entry => !entry.active).length} / 5 SLOTS</span></div><div class="fan-slots">${slots(false, 5)}</div></section>${activityMarkup}</div>`;
 }
 
 function showFanInventoryMessage(message) {
@@ -567,8 +616,12 @@ function renderEternals() {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   });
+  if (eternalsView === "teams") {
+    $("#eternals-content").innerHTML = eternals.teams.length ? `<div class="eternals-table-wrap"><div class="eternals-table-note">THE TEN NATIONS · CURRENT ROSTERS · ALL-TIME TEAM TITLES</div><table class="eternals-table teams-record"><thead><tr><th>TEAM</th><th>CURRENT DRIVERS</th><th>TEAM CHAMPION WINS</th></tr></thead><tbody>${eternals.teams.map((team, index) => `<tr><td><span class="eternal-team" style="--team-color:${team.color}"><i></i><span class="eternal-team-flag">${team.flag}</span><b>${index === 0 && team.championship_wins ? "🏆 " : ""}${escapeHTML(team.name)}</b><small>${escapeHTML(team.abbreviation)}</small></span></td><td><div class="eternal-team-drivers">${team.drivers.map(driver => `<span style="--driver-color:${driver.color}"><i></i><b>${escapeHTML(driver.name)}</b><small>Nº ${driver.number}</small></span>`).join("")}</div></td><td class="eternal-score">${team.championship_wins}</td></tr>`).join("")}</tbody></table></div>` : emptyState("No nations on the grid.", "Team records will appear here once the roster is assigned.");
+    return;
+  }
   if (eternalsView === "seasons") {
-    $("#eternals-content").innerHTML = eternals.seasons.length ? `<div class="eternals-table-wrap"><div class="eternals-table-note">UPCOMING SEASON, THEN NEWEST COMPLETED FIRST</div><table class="eternals-table seasons-record"><thead><tr><th>SEASON</th><th>START DATE</th><th>WINNER</th><th>SECOND</th><th>THIRD</th></tr></thead><tbody>${eternals.seasons.map(season => `<tr class="${season.winner ? "" : "upcoming-season"}"><td><strong>The ${escapeHTML(season.name)} Season</strong><span>${season.winner ? `SEASON ${String(season.number).padStart(2, "0")}` : "UP NEXT"}</span></td><td>${new Date(`${season.start_date}T00:00:00`).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}</td>${[season.winner, season.second, season.third].map((driver, index) => driver ? `<td><span class="eternal-driver" style="--driver-color:${driver.color}"><i></i><b>${["🏆", "🥈", "🥉"][index]} ${escapeHTML(driver.name)}</b><small>№ ${driver.number}</small></span></td>` : '<td class="eternal-tbd">—</td>').join("")}</tr>`).join("")}</tbody></table></div>` : emptyState("No names in the book—yet.", "Completed seasons will appear here after the championship race.");
+    $("#eternals-content").innerHTML = eternals.seasons.length ? `<div class="eternals-table-wrap"><div class="eternals-table-note">UPCOMING SEASON, THEN NEWEST COMPLETED FIRST</div><table class="eternals-table seasons-record"><thead><tr><th>SEASON</th><th>START DATE</th><th>TEAM CHAMPION</th><th>DRIVER CHAMPION</th><th>SECOND</th><th>THIRD</th></tr></thead><tbody>${eternals.seasons.map(season => `<tr class="${season.winner ? "" : "upcoming-season"}"><td><strong>The ${escapeHTML(season.name)} Season</strong><span>${season.winner ? `SEASON ${String(season.number).padStart(2, "0")}` : "UP NEXT"}</span></td><td>${new Date(`${season.start_date}T00:00:00`).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}</td>${season.team_champion ? `<td><span class="eternal-team compact" style="--team-color:${season.team_champion.color}"><i></i><span class="eternal-team-flag">${season.team_champion.flag}</span><b>🏆 ${escapeHTML(season.team_champion.name)}</b><small>${season.team_champion.points} PTS</small></span></td>` : '<td class="eternal-tbd">—</td>'}${[season.winner, season.second, season.third].map((driver, index) => driver ? `<td><span class="eternal-driver" style="--driver-color:${driver.color}"><i></i><b>${["🥇", "🥈", "🥉"][index]} ${escapeHTML(driver.name)}</b><small>№ ${driver.number}</small></span></td>` : '<td class="eternal-tbd">—</td>').join("")}</tr>`).join("")}</tbody></table></div>` : emptyState("No names in the book—yet.", "Completed seasons will appear here after the championship race.");
     return;
   }
   $("#eternals-content").innerHTML = eternals.drivers.length ? `<div class="eternals-table-wrap"><div class="eternals-table-note">SCORE = PODIUM 7 / 5 / 3 · CHAMPIONSHIP FINISH 2 · FINALIST FINISH 1</div><table class="eternals-table drivers-record"><thead><tr><th>DRIVER NAME</th><th>NUMBER</th><th>CHAMPIONSHIP WINS</th><th>CHAMPIONSHIP APPEARANCES</th><th>FINALIST APPEARANCES</th><th>ETERNAL SCORE</th></tr></thead><tbody>${eternals.drivers.map((driver, index) => `<tr><td><span class="eternal-driver" style="--driver-color:${driver.color}"><i></i><b>${index < 3 ? `${["🏆", "🥈", "🥉"][index]} ` : ""}${escapeHTML(driver.name)}</b></span></td><td>№ ${driver.number}</td><td>${driver.championship_wins}</td><td>${driver.championship_appearances}</td><td>${driver.finalist_appearances}</td><td class="eternal-score">${driver.eternal_score}</td></tr>`).join("")}</tbody></table></div>` : emptyState("No immortals—yet.", "A driver appears here after earning their first Eternal Score point.");
@@ -626,6 +679,43 @@ async function setFavoriteDriver(driverId, button) {
     $("#fan-dialog").close();
     renderFanPage();
     if (drivers.length) renderDrivers();
+    if (state) {
+      $("#next-race-grid").dataset.signature = "";
+      renderLive();
+    }
+  } catch (cause) {
+    error.textContent = cause instanceof TypeError ? "Could not reach the account server." : cause.message;
+    error.hidden = false;
+    button.disabled = false;
+  }
+}
+
+async function openSponsorPicker() {
+  if (!currentUser) return;
+  if (!teams.length) await loadDrivers();
+  const list = $("#sponsor-team-list");
+  list.innerHTML = teams.length ? [...teams].sort((a, b) => a.name.localeCompare(b.name)).map(team => {
+    const memberNames = team.drivers.map(id => drivers.find(driver => driver.id === id)?.name).filter(Boolean).join(" · ");
+    return `<button class="favorite-choice sponsor-choice ${isSponsored(team.id) ? "selected" : ""}" data-sponsor-team="${team.id}" style="--driver-color:${team.color}" ${isSponsored(team.id) ? "disabled" : ""}><span class="favorite-choice-number">${team.flag}</span><span><b>${escapeHTML(team.name)} ${teamBadge(team)}</b><small>${escapeHTML(memberNames)}</small></span><i></i></button>`;
+  }).join("") : '<div class="loading-state">Calling the nations to the grid…</div>';
+  $("#sponsor-error").hidden = true;
+  const dialog = $("#sponsor-dialog");
+  if (!dialog.open) dialog.showModal();
+}
+
+async function setSponsoredTeam(teamId, button) {
+  const error = $("#sponsor-error");
+  error.hidden = true;
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/fan/sponsor", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ team_id: teamId }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to save your sponsored team");
+    currentUser = data.user;
+    sponsorChangeAvailableAt = data.sponsor_change_available_at;
+    $("#sponsor-dialog").close();
+    await loadDrivers();
+    renderFanPage();
     if (state) {
       $("#next-race-grid").dataset.signature = "";
       renderLive();
@@ -755,11 +845,11 @@ function renderFinalLap() {
     root.innerHTML = `<div class="final-lap-pending"><div class="final-lap-trophy" aria-hidden="true">🏆</div><h1 id="final-lap-title">The final lap is still ahead.</h1><p>The Administrator will open the podium after the season championship.</p></div>`;
     return;
   }
-  root.innerHTML = `<div class="final-lap-hero" style="--winner-color:${finalLap.winner.color}">
+  const team = finalLap.team_champion;
+  root.innerHTML = `<div class="final-lap-hero dual-champions" style="--winner-color:${finalLap.winner.color};--team-color:${team.color}">
     <p class="eyebrow">FINAL LAP · SEASON ${String(finalLap.season.number).padStart(2, "0")}</p>
-    <div class="final-lap-trophy" aria-hidden="true">🏆</div>
-    <h1 id="final-lap-title">Congratulations from the Administrator to <em>${escapeHTML(finalLap.winner.name)}</em> for winning the ${escapeHTML(finalLap.season.name)} Season</h1>
-    <div class="champion-totals"><div><strong>${String(finalLap.wins).padStart(2, "0")}</strong><span>OVERALL WINS THIS SEASON</span></div><i></i><div><strong>${finalLap.winner.fans || 0}</strong><span>FANS</span></div></div>
+    <h1 id="final-lap-title">The ${escapeHTML(finalLap.season.name)} Season Champions</h1>
+    <div class="champions-row"><section class="champion-panel team-champion"><div class="final-lap-trophy" aria-hidden="true">🏆</div><span class="champion-kind">TEAM CHAMPION</span><div class="champion-name">${team.flag} ${escapeHTML(team.name)}</div><p>${escapeHTML(team.abbreviation)}</p><div class="champion-totals"><div><strong>${team.points}</strong><span>TEAM POINTS</span></div><i></i><div><strong>${team.sponsors || 0}</strong><span>SPONSORS</span></div></div></section><section class="champion-panel driver-champion"><div class="final-lap-trophy" aria-hidden="true">🥇</div><span class="champion-kind">DRIVER CHAMPION</span><div class="champion-name">${escapeHTML(finalLap.winner.name)}</div><p>NO. ${escapeHTML(finalLap.winner.number)}</p><div class="champion-totals"><div><strong>${String(finalLap.wins).padStart(2, "0")}</strong><span>SEASON WINS</span></div><i></i><div><strong>${finalLap.winner.fans || 0}</strong><span>FANS</span></div></div></section></div>
   </div>${electionMarkup(finalLap.election)}`;
 }
 
@@ -900,6 +990,9 @@ async function placeBet(button) {
 document.addEventListener("click", event => {
   const favorite = event.target.closest("[data-favorite-driver]");
   const openFavorite = event.target.closest("[data-open-favorite]");
+  const sponsor = event.target.closest("[data-sponsor-team]");
+  const openSponsor = event.target.closest("[data-open-sponsor]");
+  const driverViewTab = event.target.closest("[data-driver-view]");
   const driver = event.target.closest("[data-driver]");
   const race = event.target.closest("[data-race]");
   const track = event.target.closest("[data-track]");
@@ -918,10 +1011,16 @@ document.addEventListener("click", event => {
     eternalsView = eternalsTab.dataset.eternalsView;
     renderEternals();
   }
+  if (driverViewTab) {
+    driverView = driverViewTab.dataset.driverView;
+    renderDrivers();
+  }
   if (bet && !bet.disabled) placeBet(bet);
   if (driver) openDriver(Number(driver.dataset.driver));
   if (openFavorite) openFavoritePicker();
   if (favorite && !favorite.disabled) setFavoriteDriver(Number(favorite.dataset.favoriteDriver), favorite);
+  if (openSponsor) openSponsorPicker();
+  if (sponsor && !sponsor.disabled) setSponsoredTeam(sponsor.dataset.sponsorTeam, sponsor);
   if (race) openRace(Number(race.dataset.race));
   else if (track) openTrack(track.dataset.track);
   if (pagination && !pagination.disabled) { historyPage = Number(pagination.dataset.historyPage); loadHistory(); }
@@ -1014,6 +1113,7 @@ $("#auth-close").addEventListener("click", () => $("#auth-dialog").close());
 $("#auth-switch").addEventListener("click", () => showAuth(authMode === "login" ? "register" : "login"));
 $("#auth-form").addEventListener("submit", submitAuth);
 $("#fan-close").addEventListener("click", () => $("#fan-dialog").close());
+$("#sponsor-close").addEventListener("click", () => $("#sponsor-dialog").close());
 $("#logout").addEventListener("click", async () => {
   await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
   currentUser = null;
