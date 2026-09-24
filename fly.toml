@@ -1,0 +1,33 @@
+# fly.toml app configuration file generated for vastcar on 2026-09-23T21:43:07-04:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = "vastcar"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  AUTH_COOKIE_SECURE = "true"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+[mounts]
+  source = "league_data"
+  destination = "/data"
+  snapshot_retention = 14
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpus = 1
+
+[[restart]]
+  policy = "always"

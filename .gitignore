@@ -1,10 +1,28 @@
 # Runtime data (live database, WAL files, and local backups)
 data/
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.bak
+*.backup
 
 # Local configuration and secrets
 .env
 .env.*
 !.env.example
+.secrets/
+secrets/
+
+# Private keys and credential bundles
+*.key
+*.pem
+*.p12
+*.pfx
+credentials*.json
+service-account*.json
 
 # Python bytecode and tool caches
 __pycache__/
