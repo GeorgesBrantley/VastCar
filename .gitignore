@@ -1,5 +1,6 @@
 # Runtime data (live database, WAL files, and local backups)
 data/
+backups/
 *.db
 *.sqlite
 *.sqlite3

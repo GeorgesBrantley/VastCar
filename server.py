@@ -42,7 +42,20 @@ class Handler(SimpleHTTPRequestHandler):
                 self.auth.settle_bet_rewards(self.league.completed_bet_races())
                 user = self.auth.session_user(self.headers.get("Cookie"))
                 offered_races = [race for wave in value["next_waves"] for race in wave["races"]]
-                value["bets"] = self.auth.bets_for_user(user["id"], offered_races) if user else []
+                offered_races.extend(race for race in value["races"] if race["status"] == "live")
+                value["bets"] = [bet for bet in self.auth.bets_for_user(user["id"], offered_races) if not bet["settled"]] if user else []
+                live_bets = {(bet["season"], bet["race_number"], bet["driver_id"]) for bet in value["bets"]}
+                for race in value["races"]:
+                    if race["status"] != "live":
+                        continue
+                    bet_driver_ids = {driver_id for season, race_number, driver_id in live_bets
+                                      if season == race["season"] and race_number == race["race_number"]}
+                    visible_driver_ids = {driver["driver_id"] for driver in race["standings"]}
+                    missing_bet_drivers = bet_driver_ids - visible_driver_ids
+                    if missing_bet_drivers:
+                        full_race = self.league.race(race["id"])
+                        race["standings"] = [driver for driver in full_race["standings"]
+                                             if driver["driver_id"] in visible_driver_ids or driver["driver_id"] in missing_bet_drivers]
                 value["fan_activity"] = self.auth.activity_for_user(user["id"], value["season"]["number"]) if user else []
             elif url.path == "/api/drivers":
                 season = params.get("season", [None])[0]
@@ -172,7 +185,8 @@ class Handler(SimpleHTTPRequestHandler):
                 if any(target is not None and target not in self.league.roster for target in targets):
                     return self.send_json({"error": "Choose a valid driver"}, 400)
                 purchase = self.auth.buy_pit_crew_ticket(
-                    user["id"], payload["season"], payload.get("action"), *targets
+                    user["id"], payload["season"], payload.get("action"), *targets,
+                    quantity=payload.get("quantity", 1)
                 )
                 purchase["pit_crew"] = self.auth.pit_crew_ticket_count(payload["season"], user["id"])
                 self.send_json(purchase)

@@ -36,15 +36,15 @@ Effect: Everytime someone wins for the first time that season, gain 10 Coin
 
 #### Watch
 Cost: 10 Coin
-Effect: Gain 50 coins when any race takes over 8 minutes.
+Effect: Gain 200 coins when any race takes over 8 minutes.
 
 #### Team Flag
-Cost: 50 Coin
+Cost: 100 Coin
 Effect: Gain 20 coins When a Driver on a team you sponsor wins
 
 #### Grandfather Clock
 Cost: 10 Coin
-Effect: Gain 50 coins when the winning time for a race is under 7:30.
+Effect: Gain 50 coins when the winning time for a race is under 7 minutes.
 
 
 
@@ -63,9 +63,9 @@ Cost: 100 Coin
 Effect: Increase the amount you can bet per Racer by 2 bets
 
 #### Lucky ticket
-Cost: 1 Coin
-Effect: If you only bet on one driver in a race, Payout is +300
+Cost: 10 Coin
+Effect: If you only bet on one driver in a race, Payout is +200
 
 #### Insurance
 Cost: 70 Coin
-Effect: If a Car you bet on expereinces a crash, gain +100
+Effect: If a Car you bet on expereinces a crash, gain +300

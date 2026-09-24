@@ -20,7 +20,8 @@ class LocalAuthTests(unittest.TestCase):
 
     def test_registration_uses_a_salted_hash_and_default_account_values(self):
         user = self.auth.register("track_rider", "a secure password")
-        self.assertEqual(user, {"id": 1, "username": "track_rider", "admin": False, "coin": STARTING_COIN, "fav_racer": None, "inventory": []})
+        self.assertEqual(user, {"id": 1, "username": "track_rider", "admin": False, "coin": STARTING_COIN,
+                                "fav_racer": None, "sponsored_team": None, "inventory": []})
         with sqlite3.connect(self.database) as database:
             password_hash = database.execute("SELECT password_hash FROM users WHERE id = 1").fetchone()[0]
         self.assertNotIn("a secure password", password_hash)
@@ -155,10 +156,10 @@ class LocalAuthTests(unittest.TestCase):
         ]
         with self.auth.db:
             self.auth.db.execute("UPDATE users SET coin=1000, inventory=? WHERE id=?", (json.dumps(inventory), user["id"]))
-        self.assertEqual(self.auth.betting_terms(user["id"], 17), {"cost": 11, "limit": 12})
-        for _ in range(12):
+        self.assertEqual(self.auth.betting_terms(user["id"], 17), {"cost": 11, "limit": 14})
+        for _ in range(14):
             self.auth.place_bet(user["id"], 2, 14, 7, 11, driver_wins=12)
-        with self.assertRaisesRegex(AuthError, "up to 12"):
+        with self.assertRaisesRegex(AuthError, "up to 14"):
             self.auth.place_bet(user["id"], 2, 14, 7, 11, driver_wins=12)
 
     def test_sunglasses_and_lucky_tickets_bonus_a_qualifying_win(self):

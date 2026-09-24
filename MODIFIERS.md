@@ -34,6 +34,7 @@ RESPECT MAXIUM and MINIMUMs of these values
 | Haunted | Driver | Don't Look Behind | Driver Unifinished Buisness is +25, Focus is -30 | **Yes** |
 |Fritez | Driver | Good Coffee for the Souls | Driver Reflexes + 25, Deja Vu -30 | **Yes** |
 | Beautiful Vision | Driver | E F P T O Z | Driver eye count changes to a random other value | **Yes** |
+| Visited | Driver | A memorable visit. | Driver Reflexes -25, Eyes -1 (minimum 1), Audacity -25, Unfinished business +10 | **Yes** |
 
 
 ## Car modifiers

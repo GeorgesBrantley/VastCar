@@ -48,6 +48,7 @@ let eternalsView = "teams";
 let eternalsRequest = 0;
 let finalLap = null;
 let finalLapRequest = 0;
+let pendingFinalLapChoice = null;
 
 function setMobileNav(open) {
   const header = $(".site-header");
@@ -83,6 +84,7 @@ const pitCrewActions = [
   { id: "reflective-paint", title: "Reflective Paint", detail: "Give a driver’s car the Shiny modifier.", targets: 1 },
   { id: "double-agent", title: "Double Agent", detail: "Swap a driver’s team with a random other driver.", targets: 1 },
   { id: "golden-child", title: "Golden Child", detail: "Give a driver +30 Luck and their teammates -10 Luck.", targets: 1 },
+  { id: "mafia-visit", title: "Mafia Visit", detail: "Visit the Mr. Ello on the day of his daughter’s wedding.", targets: 1 },
 ];
 
 const towerItems = [
@@ -91,14 +93,14 @@ const towerItems = [
   { id: "whistle", name: "Whistle", cost: 25, icon: "⌁", effect: "Every time your Favorite Racer finishes in the top 3, gain 5 Coin." },
   { id: "camera", name: "Camera", cost: 30, icon: "▣", effect: "Every time there is a crash, gain 10 Coin." },
   { id: "old-scroll", name: "Old Scroll", cost: 10, icon: "≋", effect: "Every time someone wins for the first time that season, gain 10 Coin." },
-  { id: "watch", name: "Watch", cost: 10, icon: "◷", effect: "Gain 50 Coin when any race takes over 8 minutes." },
-  { id: "team-flag", name: "Team Flag", cost: 50, icon: "⚑", effect: "Gain 20 Coin when a driver on your sponsored team wins." },
-  { id: "grandfather-clock", name: "Grandfather Clock", cost: 10, icon: "◴", effect: "Gain 50 Coin when the winning time for a race is under 7:30." },
+  { id: "watch", name: "Watch", cost: 10, icon: "◷", effect: "Gain 200 Coin when any race takes over 8 minutes." },
+  { id: "team-flag", name: "Team Flag", cost: 100, icon: "⚑", effect: "Gain 20 Coin when a driver on your sponsored team wins." },
+  { id: "grandfather-clock", name: "Grandfather Clock", cost: 10, icon: "◴", effect: "Gain 50 Coin when the winning time for a race is under 7 minutes." },
   { id: "vegas-shark", name: "Vegas Shark", cost: 50, icon: "♠", effect: "Decrease a racer's win surcharge by 2 Coin per active Shark." },
   { id: "sunglasses", name: "Sunglasses", cost: 50, icon: "▰", effect: "Gain 500 bonus Coin per active pair when a zero-win pick wins." },
   { id: "gun", name: "Gun", cost: 100, icon: "⌐", effect: "Increase the number of bets you can place per racer by 2." },
-  { id: "lucky-ticket", name: "Lucky Ticket", cost: 1, icon: "✦", effect: "Gain 300 bonus Coin per active ticket when you only back one driver in a race." },
-  { id: "insurance", name: "Insurance", cost: 70, icon: "⊞", effect: "Gain 100 Coin if a car you bet on experiences a crash." },
+  { id: "lucky-ticket", name: "Lucky Ticket", cost: 10, icon: "✦", effect: "Gain 200 bonus Coin per active ticket when you only back one driver in a race." },
+  { id: "insurance", name: "Insurance", cost: 70, icon: "⊞", effect: "Gain 300 Coin if a car you bet on experiences a crash." },
 ];
 
 const activeItemQuantity = itemId => (currentUser?.inventory || []).filter(stack => stack.active && stack.item === itemId).reduce((total, stack) => total + stack.quantity, 0);
@@ -239,10 +241,15 @@ function standingsMarkup(race, detail = false) {
 }
 
 function standingsRows(race, detail = false) {
-  return race.standings.map(driver => `<li class="standing" style="--driver-color:${driver.color}" aria-label="Position ${driver.position}, ${escapeHTML(driver.name)}, ${driver.laps} laps completed, ${driver.distance} kilometers">
-    <span class="position">${String(driver.position).padStart(2, "0")}</span><span class="standing-number">${String(driver.number).padStart(2, "0")}</span><span class="standing-driver"><i class="driver-color"></i><span class="standing-name">${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}</span></span>
+  const betFor = driverId => (state?.bets || []).find(bet => bet.season === race.season && bet.race_number === race.race_number && bet.driver_id === driverId);
+  return race.standings.map(driver => {
+    const quantity = betFor(driver.driver_id)?.quantity || 0;
+    const betCoin = quantity ? `<span class="driver-bet-coin" role="img" aria-label="${quantity} Bets" title="${quantity} Bets">🪙</span>` : "";
+    return `<li class="standing" style="--driver-color:${driver.color}" aria-label="Position ${driver.position}, ${escapeHTML(driver.name)}, ${driver.laps} laps completed, ${driver.distance} kilometers">
+    <span class="position">${String(driver.position).padStart(2, "0")}</span><span class="standing-number">${String(driver.number).padStart(2, "0")}</span><span class="standing-driver"><i class="driver-color"></i><span class="standing-name">${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}${betCoin}</span></span>
     <span class="standing-progress">${detail ? driver.distance.toFixed(1) : `${driver.laps}<span class="tiny-progress"><i style="width:${driver.progress * 10}%"></i></span>`}</span>
-    <span class="standing-gap">${driver.position === 1 ? (driver.finished ? "WINNER" : "LEADER") : `+${driver.gap.toFixed(1)}`}</span></li>`).join("");
+    <span class="standing-gap">${driver.position === 1 ? (driver.finished ? "WINNER" : "LEADER") : `+${driver.gap.toFixed(1)}`}</span></li>`;
+  }).join("");
 }
 
 function updateTrack(root, race) {
@@ -287,7 +294,7 @@ function nextRaceCard(race) {
   return `<article class="next-race-card">
     <div class="next-race-head"><div class="race-meta"><span>RACE ${String(race.race_number).padStart(2, "0")} <span class="divider-dot">/</span> <span class="city-code">${race.city.code}</span></span><span>${dateLabel(race.start)}</span></div>
     <h3>${escapeHTML(race.name)}</h3><div class="city-line"><span class="flag">⌁</span> ${escapeHTML(race.city.circuit)}</div></div>
-    <div class="next-racers-head"><span>RACER NO.</span><span>NAME</span><span>WINS</span><span>BET</span></div>
+    <div class="next-racers-head"><span>RACER NO.</span><span>NAME</span><span>WINS</span><span>COST</span><span>BET</span></div>
     <ol class="next-racers-list">${race.racers.map(driver => {
       const bet = betFor(driver.driver_id);
       const quantity = bet?.quantity || 0;
@@ -296,7 +303,7 @@ function nextRaceCard(race) {
       const maxed = quantity >= limit;
       const short = currentUser && currentUser.coin < cost;
       const title = maxed ? `Maximum ${limit} bets placed` : `Place one bet for ${cost} Coin. A win pays 100 Coin before item bonuses.`;
-      return `<li style="--driver-color:${driver.color}"><span class="next-racer-number">${driver.number}</span><span class="next-racer-name"><i class="driver-color"></i><span>${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}${quantity ? '<span class="driver-bet-coin" role="img" aria-label="Bet placed">🪙</span>' : ""}</span></span><span class="next-racer-wins">${String(driver.wins).padStart(2, "0")}</span><button class="bet-button" data-place-bet data-season="${race.season}" data-race-number="${race.race_number}" data-driver-id="${driver.driver_id}" title="${title}" aria-label="${title} ${quantity} of ${limit} bets placed." ${(maxed || short) ? "disabled" : ""}><span aria-hidden="true">🪙</span>${quantity ? `<b>${quantity}</b>` : ""}</button></li>`;
+      return `<li style="--driver-color:${driver.color}"><span class="next-racer-number">${driver.number}</span><span class="next-racer-name"><i class="driver-color"></i><span>${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}${quantity ? `<span class="driver-bet-coin" role="img" aria-label="${quantity} Bets" title="${quantity} Bets">🪙</span>` : ""}</span></span><span class="next-racer-wins">${String(driver.wins).padStart(2, "0")}</span><span class="next-racer-cost">${cost}</span><button class="bet-button" data-place-bet data-season="${race.season}" data-race-number="${race.race_number}" data-driver-id="${driver.driver_id}" title="${title}" aria-label="${title} ${quantity} of ${limit} bets placed." ${(maxed || short) ? "disabled" : ""}><span aria-hidden="true">🪙</span>${quantity ? `<b>${quantity}</b>` : ""}</button></li>`;
     }).join("")}</ol>
   </article>`;
 }
@@ -554,8 +561,43 @@ function renderFanPage() {
     const item = towerItems.find(candidate => candidate.id === entry.item_id);
     return `${item?.icon || "◇"} ${escapeHTML(item?.name || entry.item_id)} payout`;
   };
-  const activityRows = fanActivity.map(entry => `<li class="fan-activity-row"><span class="fan-activity-kind ${entry.kind}">${entry.kind.startsWith("bet_") ? "BET" : "ITEM"}</span><span class="fan-activity-detail"><b>${activityLabel(entry)}</b><small>Race ${entry.race_number}${entry.quantity > 1 ? ` · ×${entry.quantity}` : ""} · ${dateLabel(entry.created_at)}</small></span><strong class="${entry.amount > 0 ? "positive" : entry.amount < 0 ? "negative" : "neutral"}">${entry.amount > 0 ? "+" : entry.amount < 0 ? "−" : ""}${Math.abs(entry.amount)} <small>COIN</small></strong></li>`).join("");
-  const activityMarkup = `<section class="fan-activity"><div class="fan-activity-head"><div><span class="eyebrow">CURRENT SEASON</span><h2>Betting & payouts</h2></div><span>${fanActivity.length} ${fanActivity.length === 1 ? "ENTRY" : "ENTRIES"}</span></div>${activityRows ? `<ol class="fan-activity-list">${activityRows}</ol>` : `<div class="fan-activity-empty">Your bets and item payouts will be saved here for the current season.</div>`}</section>`;
+  const collapsedActivity = [];
+  const collapsedBets = new Map();
+  fanActivity.forEach(entry => {
+    if (!entry.kind.startsWith("bet_")) {
+      collapsedActivity.push(entry);
+      return;
+    }
+    const key = `${entry.season}:${entry.race_number}:${entry.driver_id}`;
+    let bet = collapsedBets.get(key);
+    if (!bet) {
+      bet = { ...entry, amount: 0, quantity: 0, placed_quantity: 0, settled_quantity: 0, status: "active" };
+      collapsedBets.set(key, bet);
+      collapsedActivity.push(bet);
+    }
+    bet.amount += entry.amount;
+    if (entry.kind === "bet_placed") bet.placed_quantity += entry.quantity || 1;
+    if (entry.kind === "bet_payout") {
+      bet.status = "won";
+      bet.settled_quantity = Math.max(bet.settled_quantity, entry.quantity || 1);
+    } else if (entry.kind === "bet_loss") {
+      bet.status = "lost";
+      bet.settled_quantity = Math.max(bet.settled_quantity, entry.quantity || 1);
+    }
+    bet.quantity = bet.settled_quantity || bet.placed_quantity;
+    if (entry.id > bet.id) {
+      bet.id = entry.id;
+      bet.created_at = entry.created_at;
+    }
+  });
+  collapsedActivity.sort((a, b) => b.id - a.id);
+  const collapsedActivityLabel = entry => {
+    if (!entry.status) return activityLabel(entry);
+    const outcome = entry.status === "won" ? " · WON" : entry.status === "lost" ? " · LOST" : "";
+    return `Bet on ${escapeHTML(driverName(entry.driver_id))}${outcome}`;
+  };
+  const activityRows = collapsedActivity.map(entry => `<li class="fan-activity-row"><span class="fan-activity-kind ${entry.kind}">${entry.kind.startsWith("bet_") ? "BET" : "ITEM"}</span><span class="fan-activity-detail"><b>${collapsedActivityLabel(entry)}</b><small>Race ${entry.race_number}${entry.quantity > 1 ? ` · ×${entry.quantity}` : ""} · ${dateLabel(entry.created_at)}</small></span><strong class="${entry.amount > 0 ? "positive" : entry.amount < 0 ? "negative" : "neutral"}">${entry.amount > 0 ? "+" : entry.amount < 0 ? "−" : ""}${Math.abs(entry.amount)} <small>COIN</small></strong></li>`).join("");
+  const activityMarkup = `<section class="fan-activity"><div class="fan-activity-head"><div><span class="eyebrow">CURRENT SEASON</span><h2>Betting & payouts</h2></div><span>${collapsedActivity.length} ${collapsedActivity.length === 1 ? "ENTRY" : "ENTRIES"}</span></div>${activityRows ? `<ol class="fan-activity-list">${activityRows}</ol>` : `<div class="fan-activity-empty">Your bets and item payouts will be saved here for the current season.</div>`}</section>`;
   $("#fan-content").innerHTML = `<div class="fan-layout"><section>${favoriteMarkup}</section><section>${sponsorMarkup}</section><section class="fan-inventory fan-inventory-active"><div class="fan-inventory-head"><div class="fan-section-title">Active Inventory</div><span>${inventory.filter(entry => entry.active).length} / 3 SLOTS</span></div><div class="fan-slots">${slots(true, 3)}</div><p id="fan-inventory-message" class="fan-inventory-message" role="status">Only active items earn Coin. Use Move, or drag a stack onto another to swap.</p><a class="inventory-link" href="#tower">Buy equipment at The Tower ↗</a></section><section class="fan-inventory fan-stash"><div class="fan-inventory-head"><div class="fan-section-title">Stash</div><span>${inventory.filter(entry => !entry.active).length} / 5 SLOTS</span></div><div class="fan-slots">${slots(false, 5)}</div></section>${activityMarkup}</div>`;
 }
 
@@ -875,7 +917,7 @@ function renderFinalLap() {
   if (page !== "final-lap" || !finalLap) return;
   const root = $("#final-lap-content");
   if (!finalLap.winner) {
-    root.innerHTML = `<div class="final-lap-pending"><div class="final-lap-trophy" aria-hidden="true">🏆</div><h1 id="final-lap-title">The final lap is still ahead.</h1><p>The Administrator will open the podium after the season championship.</p></div>`;
+    root.innerHTML = `<div class="final-lap-pending"><div class="final-lap-trophy" aria-hidden="true">🏆</div><h1 id="final-lap-title">The final lap is still ahead.</h1><p>The first season has not crowned a champion yet, but the next season ballot is open.</p></div>${electionMarkup(finalLap.election)}`;
     return;
   }
   const team = finalLap.team_champion;
@@ -889,18 +931,20 @@ function renderFinalLap() {
 function electionMarkup(election) {
   if (!election || election.phase === "locked") return `<section class="election-locked"><p class="eyebrow">THE ADMINISTRATION</p><div class="election-title">Next Season Voting will be revealed Thursday</div></section>`;
   if (election.phase === "results") return electionResultsMarkup(election);
-  const selected = election.amendments?.selected;
-  const disabled = !currentUser || !!selected;
+  const savedSelection = election.amendments?.selected;
+  const selected = pendingFinalLapChoice || savedSelection;
+  const disabled = !currentUser || !!savedSelection;
   const driverOptions = (election.drivers || []).map(driver => `<option value="${driver.id}">№ ${driver.number} · ${escapeHTML(driver.name)}</option>`).join("");
   return `<section class="election-window">
     <div class="election-intro"><p class="eyebrow">VOTING OPEN · CLOSES ${escapeHTML(easternStartTime(election.closes_at).toUpperCase())}</p><div class="election-title">The Administration is listening.</div><p>Two distinct ballots. Amendment votes are permanent once cast. Sponsor Help entries cost 10 Coin each.</p></div>
     <div class="election-group"><div class="election-group-head"><div><span>01 / VASTCAR AMENDMENTS</span><strong>The Administration wants your opinion on the future of VastCar</strong></div><small>ONE LOCKED VOTE</small></div>
-      <div class="amendment-options">${finalLapChoices.map(choice => `<button type="button" class="amendment-option ${selected === choice.id ? "selected" : ""}" data-final-lap-vote="${choice.id}" ${disabled ? "disabled" : ""} aria-pressed="${selected === choice.id}"><span>${escapeHTML(choice.title)}</span><i>${selected === choice.id ? "VOTE LOCKED" : "SELECT"}</i></button>`).join("")}</div>
-      <p id="final-lap-vote-status" class="election-status" role="status" aria-live="polite">${selected ? "Your amendment vote is locked in." : currentUser ? "Choose carefully. This vote cannot be changed." : "Log in to cast an amendment vote."}</p>
+      <div class="amendment-options">${finalLapChoices.map(choice => `<button type="button" class="amendment-option ${selected === choice.id ? "selected" : ""}" data-final-lap-vote="${choice.id}" ${disabled ? "disabled" : ""} aria-pressed="${selected === choice.id}"><span>${escapeHTML(choice.title)}</span><i>${savedSelection === choice.id ? "VOTE LOCKED" : selected === choice.id ? "SELECTED" : "SELECT"}</i></button>`).join("")}</div>
+      <button type="button" class="final-lap-vote-button" data-final-lap-submit ${!currentUser || !!savedSelection || !pendingFinalLapChoice ? "disabled" : ""}>VOTE</button>
+      <p id="final-lap-vote-status" class="election-status" role="status" aria-live="polite">${savedSelection ? "Your amendment vote is locked in." : pendingFinalLapChoice ? "Your selection is ready. Cast your vote when you’re ready." : currentUser ? "Choose an amendment, then cast your vote." : "Log in to cast an amendment vote."}</p>
     </div>
     <div class="election-group"><div class="election-group-head"><div><span>02 / SPONSOR HELP</span><strong>Lend your support or disgust to our Eternal Racers</strong></div><small>10 COIN / ENTRY</small></div>
       <p class="pit-explanation">Every purchase adds one raffle entry. The Administration draws up to ten unique changes when voting closes; duplicate drawn choices are discarded.</p>
-      <div class="pit-action-grid">${pitCrewActions.map(action => `<div class="pit-action" data-pit-action-card="${action.id}"><div><b>${escapeHTML(action.title)}</b><p>${escapeHTML(action.detail)}</p></div><label>DRIVER<select data-pit-target-a>${driverOptions}</select></label>${action.targets === 2 ? `<label>SECOND DRIVER<select data-pit-target-b>${driverOptions}</select></label>` : ""}<button type="button" data-buy-pit-entry="${action.id}" ${!currentUser ? "disabled" : ""}>ADD ENTRY · 10 COIN</button></div>`).join("")}</div>
+      <div class="pit-action-grid">${pitCrewActions.map(action => `<div class="pit-action" data-pit-action-card="${action.id}"><div><b>${escapeHTML(action.title)}</b><p>${escapeHTML(action.detail)}</p></div><label>DRIVER<select data-pit-target-a>${driverOptions}</select></label>${action.targets === 2 ? `<label>SECOND DRIVER<select data-pit-target-b>${driverOptions}</select></label>` : ""}<label>BALLOTS<input type="number" min="1" max="${currentUser ? Math.floor(currentUser.coin / 10) : 0}" value="1" data-pit-quantity ${!currentUser ? "disabled" : ""}></label><button type="button" data-buy-pit-entry="${action.id}" ${!currentUser || currentUser.coin < 10 ? "disabled" : ""}>ADD BALLOTS · 10 COIN EACH</button></div>`).join("")}</div>
       <p id="pit-crew-status" class="election-status" role="status" aria-live="polite">${currentUser ? `${election.pit_crew.mine} of your entries · ${currentUser.coin} Coin available` : "Log in to buy Sponsor Help entries."}</p>
     </div>
   </section>`;
@@ -925,6 +969,7 @@ async function castFinalLapVote(button) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to cast that vote");
     finalLap.election.amendments = data.poll;
+    pendingFinalLapChoice = null;
     renderFinalLap();
     $("#final-lap-vote-status").textContent = "Your vote is in. Thank you.";
   } catch (cause) {
@@ -941,13 +986,14 @@ async function buyPitCrewEntry(button) {
   try {
     const targetA = Number($("[data-pit-target-a]", card).value);
     const targetBSelect = $("[data-pit-target-b]", card);
-    const response = await fetch("/api/final-lap/pit-crew", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ season: finalLap.election.season, action: button.dataset.buyPitEntry, target_a: targetA, target_b: targetBSelect ? Number(targetBSelect.value) : null }) });
+    const quantity = Math.max(1, Math.floor(Number($("[data-pit-quantity]", card).value) || 1));
+    const response = await fetch("/api/final-lap/pit-crew", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ season: finalLap.election.season, action: button.dataset.buyPitEntry, target_a: targetA, target_b: targetBSelect ? Number(targetBSelect.value) : null, quantity }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Unable to add that entry");
     currentUser = data.user;
     finalLap.election.pit_crew = data.pit_crew;
     renderFinalLap();
-    $("#pit-crew-status").textContent = "Entry added to the raffle.";
+    $("#pit-crew-status").textContent = `${quantity} ${quantity === 1 ? "ballot" : "ballots"} added to the raffle.`;
   } catch (cause) {
     status.textContent = cause.message;
     button.disabled = false;
@@ -1038,6 +1084,7 @@ document.addEventListener("click", event => {
   const waveNav = event.target.closest("[data-wave-nav]");
   const eternalsTab = event.target.closest("[data-eternals-view]");
   const finalLapVote = event.target.closest("[data-final-lap-vote]");
+  const finalLapSubmit = event.target.closest("[data-final-lap-submit]");
   const pitCrewEntry = event.target.closest("[data-buy-pit-entry]");
   if (event.target.closest("#primary-nav a")) setMobileNav(false);
   if (waveNav && state?.next_waves?.length) {
@@ -1045,7 +1092,11 @@ document.addEventListener("click", event => {
     selectedFutureWave = Math.max(0, Math.min(selectedFutureWave, state.next_waves.length - 1));
     renderLive();
   }
-  if (finalLapVote && !finalLapVote.disabled) castFinalLapVote(finalLapVote);
+  if (finalLapVote && !finalLapVote.disabled) {
+    pendingFinalLapChoice = finalLapVote.dataset.finalLapVote;
+    renderFinalLap();
+  }
+  if (finalLapSubmit && !finalLapSubmit.disabled) castFinalLapVote({ dataset: { finalLapVote: pendingFinalLapChoice } });
   if (pitCrewEntry && !pitCrewEntry.disabled) buyPitCrewEntry(pitCrewEntry);
   if (eternalsTab) {
     eternalsView = eternalsTab.dataset.eternalsView;

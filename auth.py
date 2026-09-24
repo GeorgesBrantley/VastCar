@@ -28,8 +28,8 @@ DAILY_LOGIN_COIN = 50
 BET_PAYOUT = 100
 MAX_BETS_PER_DRIVER = 10
 SUNGLASSES_BONUS = 500
-LUCKY_TICKET_BONUS = 300
-INSURANCE_BONUS = 100
+LUCKY_TICKET_BONUS = 200
+INSURANCE_BONUS = 300
 
 ITEMS = {
     "binoculars": {"name": "Binoculars", "cost": 100, "effect": "Every time your Favorite Racer wins, gain 10 Coin."},
@@ -37,14 +37,14 @@ ITEMS = {
     "whistle": {"name": "Whistle", "cost": 25, "effect": "Every time your Favorite Racer finishes in the top 3, gain 5 Coin."},
     "camera": {"name": "Camera", "cost": 30, "effect": "Every time there is a crash, gain 10 Coin."},
     "old-scroll": {"name": "Old Scroll", "cost": 10, "effect": "Every time someone wins for the first time that season, gain 10 Coin."},
-    "watch": {"name": "Watch", "cost": 10, "effect": "Gain 50 Coin when any race takes over 8 minutes."},
-    "team-flag": {"name": "Team Flag", "cost": 50, "effect": "Gain 20 Coin when a driver on your sponsored team wins."},
-    "grandfather-clock": {"name": "Grandfather Clock", "cost": 10, "effect": "Gain 50 Coin when the winning time for a race is under 7:30."},
+    "watch": {"name": "Watch", "cost": 10, "effect": "Gain 200 Coin when any race takes over 8 minutes."},
+    "team-flag": {"name": "Team Flag", "cost": 100, "effect": "Gain 20 Coin when a driver on your sponsored team wins."},
+    "grandfather-clock": {"name": "Grandfather Clock", "cost": 10, "effect": "Gain 50 Coin when the winning time for a race is under 7 minutes."},
     "vegas-shark": {"name": "Vegas Shark", "cost": 50, "effect": "Decrease a racer's win surcharge by 2 Coin per active Shark."},
     "sunglasses": {"name": "Sunglasses", "cost": 50, "effect": "Gain 500 bonus Coin per active pair when a zero-win pick wins."},
     "gun": {"name": "Gun", "cost": 100, "effect": "Increase the number of bets you can place per racer by 2."},
-    "lucky-ticket": {"name": "Lucky Ticket", "cost": 1, "effect": "Gain 300 bonus Coin per active ticket when you only back one driver in a race."},
-    "insurance": {"name": "Insurance", "cost": 70, "effect": "Gain 100 Coin if a car you bet on experiences a crash."},
+    "lucky-ticket": {"name": "Lucky Ticket", "cost": 10, "effect": "Gain 200 bonus Coin per active ticket when you only back one driver in a race."},
+    "insurance": {"name": "Insurance", "cost": 70, "effect": "Gain 300 Coin if a car you bet on experiences a crash."},
 }
 MAX_STACK_SIZE = 10
 ACTIVE_SLOT_LIMIT = 3
@@ -61,6 +61,7 @@ PIT_CREW_ACTIONS = {
     "reflective-paint": 1,
     "double-agent": 1,
     "golden-child": 1,
+    "mafia-visit": 1,
 }
 PIT_CREW_TICKET_COST = 10
 
@@ -335,9 +336,10 @@ class LocalAuth:
                 raise AuthError("Your amendment vote is already locked in") from error
         return self.final_lap_poll(season, user_id)
 
-    def buy_pit_crew_ticket(self, user_id, season, action, target_a, target_b=None):
+    def buy_pit_crew_ticket(self, user_id, season, action, target_a, target_b=None, quantity=1):
         selections = PIT_CREW_ACTIONS.get(action)
-        if type(season) is not int or selections is None or type(target_a) is not int:
+        if (type(season) is not int or selections is None or type(target_a) is not int
+                or type(quantity) is not int or quantity < 1):
             raise AuthError("Choose a valid pit crew change")
         if selections == 2:
             if type(target_b) is not int or target_a == target_b:
@@ -349,15 +351,17 @@ class LocalAuth:
             user = self.db.execute("SELECT coin FROM users WHERE id=?", (user_id,)).fetchone()
             if user is None:
                 raise AuthError("Your session has expired")
-            if user["coin"] < PIT_CREW_TICKET_COST:
-                raise AuthError(f"You need {PIT_CREW_TICKET_COST} Coin for a pit crew entry")
-            self.db.execute("UPDATE users SET coin=coin-? WHERE id=?", (PIT_CREW_TICKET_COST, user_id))
-            cursor = self.db.execute(
+            total_cost = PIT_CREW_TICKET_COST * quantity
+            if user["coin"] < total_cost:
+                raise AuthError(f"You need {total_cost} Coin for {quantity} pit crew entries")
+            self.db.execute("UPDATE users SET coin=coin-? WHERE id=?", (total_cost, user_id))
+            cursor = self.db.cursor()
+            cursor.executemany(
                 """INSERT INTO pit_crew_tickets(user_id,season,action,target_a,target_b,created_at)
                    VALUES (?,?,?,?,?,?)""",
-                (user_id, season, action, target_a, target_b, int(self.clock())),
+                [(user_id, season, action, target_a, target_b, int(self.clock())) for _ in range(quantity)],
             )
-            return {"ticket_id": cursor.lastrowid, "user": self._user_by_id(user_id)}
+            return {"ticket_id": cursor.lastrowid, "quantity": quantity, "user": self._user_by_id(user_id)}
 
     def pit_crew_ticket_count(self, season, user_id=None):
         with self.lock:
@@ -499,11 +503,11 @@ class LocalAuth:
                     if race["first_season_win"]:
                         rewards.append(("old-scroll", active["old-scroll"] * 10))
                     if race["duration"] > 8 * 60:
-                        rewards.append(("watch", active["watch"] * 50))
+                        rewards.append(("watch", active["watch"] * 200))
                     winner = next((entry for entry in standings if entry["position"] == 1), None)
                     if winner and winner.get("team", {}).get("id") == user["sponsored_team"]:
                         rewards.append(("team-flag", active["team-flag"] * 20))
-                    if winner and winner.get("finish_time", race["duration"]) < 7 * 60 + 30:
+                    if winner and winner.get("finish_time", race["duration"]) < 7 * 60:
                         rewards.append(("grandfather-clock", active["grandfather-clock"] * 50))
                     rewards = [(item_id, amount) for item_id, amount in rewards if amount]
                     reward = sum(amount for _item_id, amount in rewards)

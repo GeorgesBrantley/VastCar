@@ -66,6 +66,7 @@ MODIFIERS = {
     "beautiful-vision": {"name": "Beautiful Vision", "description": "E F P T O Z", "implementation": "beautiful-vision"},
     "unheard-frequency": {"name": "Unheard Frequency", "description": "Car loses 30 Horsepower, gains 10 Ghostpower, and gains 10 Veil.", "implementation": "unheard-frequency"},
     "shiny": {"name": "Shiny", "description": "Car loses 50 Rust and gains 50 Hauntings.", "implementation": "shiny"},
+    "visited": {"name": "Visited", "description": "A memorable visit.", "implementation": "visited"},
 }
 ROSTER_VERSION = 5
 NAMES = [
@@ -268,12 +269,15 @@ def stat_map(driver, effective=True):
         adjustments.update({"Unfinished business": 25, "Focus": -30})
     if "fritez" in implementations:
         adjustments.update({"Reflexes": 25, "Déjà vu": -30})
+    if "visited" in implementations:
+        adjustments.update({"Reflexes": -25, "Eyes": -1, "Audacity": -25, "Unfinished business": 10})
     if "unheard-frequency" in car_implementations:
         adjustments.update({"Horsepower": -30, "Ghostpower": 10, "Veil": 10})
     if "shiny" in car_implementations:
         adjustments.update({"Rust": -50, "Hauntings": 50})
     for name, change in adjustments.items():
-        stats[name] = max(0, min(100, stats[name] + change))
+        minimum = 1 if name == "Eyes" and "visited" in implementations else 0
+        stats[name] = max(minimum, min(100, stats[name] + change))
     return stats
 
 
@@ -466,6 +470,7 @@ class League:
                 driver = self.roster[driver_id]
                 plans.append({"driver_id": driver["id"], "grid": grid + 1, "splits": [], "events": [],
                               "total": 0.0, "pace_noise": rng.uniform(-1.6, 1.6)})
+            race_stats = {plan["driver_id"]: stat_map(self.roster[plan["driver_id"]]) for plan in plans}
 
             # Laps are built as rounds so first/last place and nearby traffic at
             # the beginning of each lap can drive events without seeing the future.
@@ -475,7 +480,7 @@ class League:
                 previous_totals = {plan["driver_id"]: plan["total"] for plan in plans}
                 for plan in plans:
                     driver = self.roster[plan["driver_id"]]
-                    stats = stat_map(driver)
+                    stats = race_stats[driver["id"]]
                     position = positions[driver["id"]]
                     distance = lap * city["length"]
                     veil = stats["Veil"] / 100
@@ -738,20 +743,22 @@ class League:
                 (CHAMPIONSHIP_FINAL_SLOT,),
             ).fetchone()
             if row is None:
-                return {"winner": None}
-            winner_id = row["winner"]
-            wins = self.db.execute(
-                "SELECT COUNT(*) FROM races WHERE completed=1 AND season=? AND winner=?",
-                (row["season"], winner_id),
-            ).fetchone()[0]
-            driver = self.roster[winner_id]
-            result = {
-                "season": {"number": row["season"], "name": season_name(row["season"])},
-                "winner": {key: driver[key] for key in ("id", "name", "number", "color")},
-                "wins": wins,
-            }
-            teams = self.teams(row["season"])
-            result["team_champion"] = teams[0] if teams else None
+                season_number = season_number_for(self.season_zero_date, now)
+                result = {"winner": None, "season": {"number": season_number, "name": season_name(season_number)}}
+            else:
+                winner_id = row["winner"]
+                wins = self.db.execute(
+                    "SELECT COUNT(*) FROM races WHERE completed=1 AND season=? AND winner=?",
+                    (row["season"], winner_id),
+                ).fetchone()[0]
+                driver = self.roster[winner_id]
+                result = {
+                    "season": {"number": row["season"], "name": season_name(row["season"])},
+                    "winner": {key: driver[key] for key in ("id", "name", "number", "color")},
+                    "wins": wins,
+                }
+                teams = self.teams(row["season"])
+                result["team_champion"] = teams[0] if teams else None
             local_now = datetime.fromtimestamp(now, EASTERN)
             reveal_date = local_now.date() - timedelta(days=(local_now.weekday() - 3) % 7)
             reveal = datetime.combine(reveal_date, datetime_time(), EASTERN).timestamp()
@@ -762,15 +769,21 @@ class League:
                    ORDER BY season DESC LIMIT 1""",
                 (CHAMPIONSHIP_FINAL_SLOT, reveal),
             ).fetchone()
-            if election_row:
-                phase = "open" if now < closes else "results" if now < results_end else "locked"
-                result["election"] = {
-                    "season": election_row["season"],
-                    "season_name": season_name(election_row["season"]),
-                    "phase": phase,
+            if election_row or row is None:
+                election_season = election_row["season"] if election_row else result["season"]["number"]
+                timing = self.election_timing(election_season) if election_row else {
                     "opens_at": reveal,
                     "closes_at": closes,
                     "results_end_at": results_end,
+                }
+                phase = "open" if now < timing["closes_at"] else "results" if now < timing["results_end_at"] else "locked"
+                result["election"] = {
+                    "season": election_season,
+                    "season_name": season_name(election_season),
+                    "phase": phase,
+                    "opens_at": timing["opens_at"],
+                    "closes_at": timing["closes_at"],
+                    "results_end_at": timing["results_end_at"],
                 }
             else:
                 result["election"] = None
@@ -869,6 +882,9 @@ class League:
                         teammate_luck["value"] -= 10
                         refresh(teammate)
                         changed.add(teammate_id)
+                elif action == "mafia-visit":
+                    add_modifier(first, "visited")
+                    changed.add(first_id)
 
             for driver_id in changed:
                 self.db.execute("UPDATE drivers SET data=? WHERE id=?",
