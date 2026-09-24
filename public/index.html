@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#070b18">
   <meta name="description" content="An always-on, delightfully strange racing league.">
   <title>VASTCAR RACING</title>
@@ -14,11 +14,13 @@
   <a class="skip" href="#main">Skip to content</a>
   <header class="site-header">
     <a class="wordmark" href="#live" aria-label="VASTCAR RACING home"><span class="brand-symbol" aria-hidden="true">ϟ</span><span>VASTCAR<br>RACING<span class="brand-dot">®</span></span></a>
-    <nav aria-label="Main navigation">
+    <button id="mobile-nav-toggle" class="mobile-nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav"><span>Menu</span><i aria-hidden="true"></i></button>
+    <nav id="primary-nav" aria-label="Main navigation">
       <a href="#live" data-page="live" class="active"><span class="nav-dot"></span>Races<span class="nav-count">03</span></a>
       <details class="nav-menu" id="stats-nav"><summary>Stats<span class="nav-chevron" aria-hidden="true">⌄</span></summary><div class="nav-popover"><a href="#drivers" data-page="drivers">Drivers<span class="nav-count">30</span></a><a href="#tracks" data-page="tracks">Tracks<span class="nav-count">12</span></a><a href="#history" data-page="history">Season<span aria-hidden="true">↗</span></a></div></details>
       <details class="nav-menu" id="portal-nav" hidden><summary>Portal<span class="nav-chevron" aria-hidden="true">⌄</span></summary><div class="nav-popover"><a href="#fan" data-page="fan">You<span aria-hidden="true">♥</span></a><a href="#tower" data-page="tower">The Tower<span aria-hidden="true">↗</span></a><a href="#eternals" data-page="eternals">The Eternals<span aria-hidden="true">♛</span></a></div></details>
       <a href="#final-lap" data-page="final-lap">Final Lap<span aria-hidden="true">🏆</span></a>
+      <a href="#about" data-page="about" class="nav-about">What is Vastcar?</a>
     </nav>
     <div class="header-right"><div class="next-wave"><div class="eyebrow">NEXT RACES <span>↗</span></div><div id="countdown" class="countdown">--<span>:</span>--</div></div><div id="account" class="account"><button id="login" class="account-button">Log in</button><button id="register" class="account-button account-primary">Register</button><span id="account-name" class="account-name" hidden></span><button id="logout" class="logout" hidden>Sign out</button></div></div>
   </header>
@@ -52,6 +54,56 @@
     </section>
     <section id="page-final-lap" class="page" hidden aria-labelledby="final-lap-title">
       <div id="final-lap-content"><div class="loading-state">Preparing the podium…</div></div>
+    </section>
+    <section id="page-about" class="page about-page" hidden aria-labelledby="about-title">
+      <div class="about-hero">
+        <div class="about-intro">
+          <p class="eyebrow"><span class="pulse" aria-hidden="true"></span> THE LEAGUE</p>
+          <h1 id="about-title">What is <em>Vastcar?</em></h1>
+          <p>Vastcar is a racing league of real drivers representing real countries. Choose a national team to back, follow the weekly season, and bet on upcoming races to earn Coin.</p>
+          <div class="about-actions"><a href="#live">Watch the current wave <span aria-hidden="true">↗</span></a><a href="#drivers">Choose a team <span aria-hidden="true">↗</span></a></div>
+        </div>
+        <div class="about-telemetry" aria-hidden="true">
+          <div class="about-circuit" aria-hidden="true">
+            <svg viewBox="0 0 420 220">
+              <path class="about-track-shadow" d="M65 117C41 72 87 31 159 36c64 4 78 31 132 29 52-2 94 20 93 61-2 44-49 65-104 57-50-7-72-31-126-20-52 11-74-18-89-46Z"/>
+              <path class="about-track-line" d="M65 117C41 72 87 31 159 36c64 4 78 31 132 29 52-2 94 20 93 61-2 44-49 65-104 57-50-7-72-31-126-20-52 11-74-18-89-46Z"/>
+              <circle cx="70" cy="73" r="7" class="about-marker marker-one"/><circle cx="328" cy="72" r="7" class="about-marker marker-two"/><circle cx="325" cy="178" r="7" class="about-marker marker-three"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="about-facts" aria-label="League facts"><div><strong>300</strong><span>RACES / SEASON</span></div><div><strong>30</strong><span>DRIVERS</span></div><div><strong>10</strong><span>NATIONAL TEAMS</span></div><div><strong>12</strong><span>CIRCUITS</span></div></div>
+
+      <article class="about-player-layer about-loop">
+        <div class="about-section-label"><span>01</span><p>HOW YOU PLAY</p></div>
+        <h3>Back a country. Turn race picks into influence.</h3>
+        <div class="about-player-columns">
+          <div><b>BACK</b><strong>Choose your team</strong><p>Support one country and follow its drivers through the season.</p></div>
+          <div><b>BET</b><strong>Pick race winners</strong><p>Spend Coin on drivers before their race begins.</p></div>
+          <div><b>EARN</b><strong>Build your balance</strong><p>Winning bets pay Coin. Equipped items can add rewards from race events.</p></div>
+          <div><b>INFLUENCE</b><strong>Change the league</strong><p>Use Coin to unlock league-wide changes and upgrade drivers and their rides.</p></div>
+        </div>
+      </article>
+
+      <article class="about-schedule">
+        <div class="about-schedule-intro">
+          <div class="about-section-label"><span>02</span><p>WEEKLY SCHEDULE / EASTERN</p></div>
+          <h3>Four days of racing. One championship day.</h3>
+          <div class="about-week">
+            <div class="about-day active"><span>MON</span><i></i></div><div class="about-day active"><span>TUE</span><i></i></div><div class="about-day active"><span>WED</span><i></i></div><div class="about-day active"><span>THU</span><i></i></div><div class="about-day final"><span>FRI</span><i></i></div>
+          </div>
+        </div>
+        <div class="about-schedule-table">
+          <div class="about-schedule-row head"><span>DAY</span><span>TIME</span><span>FORMAT</span><span>RACES</span></div>
+          <div class="about-schedule-row"><b>MON—THU</b><span>9:00 AM—5:00 PM</span><strong>Waves every 20 minutes</strong><em>3 per wave</em></div>
+          <div class="about-schedule-row friday"><b>FRIDAY</b><span>11:00 AM</span><strong>Round 1 qualifiers</strong><em>3 races</em></div>
+          <div class="about-schedule-row friday"><b>FRIDAY</b><span>11:30 AM</span><strong>Round 2 qualifiers</strong><em>2 races</em></div>
+          <div class="about-schedule-row final"><b>FRIDAY</b><span>12:00 PM</span><strong>Season championship</strong><em>1 final</em></div>
+          <div class="about-schedule-row reset"><b>MONDAY</b><span>NEW WEEK</span><strong>New season begins</strong><em>Archive remains</em></div>
+        </div>
+      </article>
     </section>
     <section id="page-fan" class="page" hidden aria-labelledby="fan-title">
       <div class="fan-header"><div><h1 id="fan-title">Your fan page</h1></div><div class="fan-coin"><span>COINS</span><b id="fan-coin-value">0</b></div></div>

@@ -49,6 +49,24 @@ let eternalsRequest = 0;
 let finalLap = null;
 let finalLapRequest = 0;
 
+function setMobileNav(open) {
+  const header = $(".site-header");
+  const toggle = $("#mobile-nav-toggle");
+  header.classList.toggle("nav-open", open);
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.querySelector("span").textContent = open ? "Close" : "Menu";
+  if (!open) $$(".nav-menu", header).forEach(menu => menu.removeAttribute("open"));
+}
+
+function syncDialogScroll() {
+  document.body.classList.toggle("dialog-open", $$("dialog").some(dialog => dialog.open));
+}
+
+function openModal(dialog) {
+  if (!dialog.open) dialog.showModal();
+  syncDialogScroll();
+}
+
 const finalLapChoices = [
   { id: "weather", title: "Weather" },
   { id: "advertising", title: "Advertising" },
@@ -141,7 +159,7 @@ function showAuth(mode) {
   $("#auth-error").hidden = true;
   $("#auth-form").reset();
   const dialog = $("#auth-dialog");
-  if (!dialog.open) dialog.showModal();
+  openModal(dialog);
   setTimeout(() => $("#auth-username").focus(), 0);
 }
 
@@ -678,7 +696,7 @@ async function openFavoritePicker() {
   list.innerHTML = drivers.length ? [...drivers].sort((a, b) => a.name.localeCompare(b.name)).map(driver => `<button class="favorite-choice ${isFavorite(driver.id) ? "selected" : ""}" data-favorite-driver="${driver.id}" style="--driver-color:${driver.color}" ${isFavorite(driver.id) ? "disabled" : ""}><span class="favorite-choice-number">${driver.number}</span><span><b>${escapeHTML(driver.name)}${favoriteHeart(driver.id)}</b><small>“${escapeHTML(driver.car.name)}”</small></span><i></i></button>`).join("") : '<div class="loading-state">Opening the paddock…</div>';
   $("#fan-error").hidden = true;
   const dialog = $("#fan-dialog");
-  if (!dialog.open) dialog.showModal();
+  openModal(dialog);
 }
 
 async function setFavoriteDriver(driverId, button) {
@@ -715,7 +733,7 @@ async function openSponsorPicker() {
   }).join("") : '<div class="loading-state">Calling the nations to the grid…</div>';
   $("#sponsor-error").hidden = true;
   const dialog = $("#sponsor-dialog");
-  if (!dialog.open) dialog.showModal();
+  openModal(dialog);
 }
 
 async function setSponsoredTeam(teamId, button) {
@@ -800,13 +818,13 @@ function updateRaceDetail(race) {
 
 function showDialog() {
   const dialog = $("#detail-dialog");
-  if (!dialog.open) dialog.showModal();
-  document.body.style.overflow = "hidden";
+  openModal(dialog);
 }
 
 function changePage() {
   const requested = location.hash.slice(1) || "live";
-  page = ["live", "drivers", "tracks", "history", "final-lap", "fan", "tower", "eternals"].includes(requested) && (!["fan", "tower", "eternals"].includes(requested) || currentUser) ? requested : "live";
+  setMobileNav(false);
+  page = ["live", "drivers", "tracks", "history", "final-lap", "about", "fan", "tower", "eternals"].includes(requested) && (!["fan", "tower", "eternals"].includes(requested) || currentUser) ? requested : "live";
   $$(".page").forEach(section => { section.hidden = section.id !== `page-${page}`; });
   $$("nav [data-page]").forEach(link => {
     const active = link.dataset.page === page;
@@ -815,7 +833,7 @@ function changePage() {
     else link.removeAttribute("aria-current");
   });
   $$(".nav-menu").forEach(menu => menu.classList.toggle("active", !!$("[data-page].active", menu)));
-  document.title = `${{ live: "Races", drivers: "Drivers", tracks: "Tracks", history: "Season", "final-lap": "Final Lap", fan: "You", tower: "The Tower", eternals: "The Eternals" }[page]} — VASTCAR RACING`;
+  document.title = `${{ live: "Races", drivers: "Drivers", tracks: "Tracks", history: "Season", "final-lap": "Final Lap", about: "What is Vastcar?", fan: "You", tower: "The Tower", eternals: "The Eternals" }[page]} — VASTCAR RACING`;
   if (page === "drivers") {
     if (drivers.length) renderDrivers();
     else $("#driver-grid").innerHTML = '<div class="loading-state">Opening the paddock…</div>';
@@ -1021,6 +1039,7 @@ document.addEventListener("click", event => {
   const eternalsTab = event.target.closest("[data-eternals-view]");
   const finalLapVote = event.target.closest("[data-final-lap-vote]");
   const pitCrewEntry = event.target.closest("[data-buy-pit-entry]");
+  if (event.target.closest("#primary-nav a")) setMobileNav(false);
   if (waveNav && state?.next_waves?.length) {
     selectedFutureWave += waveNav.dataset.waveNav === "next" ? 1 : -1;
     selectedFutureWave = Math.max(0, Math.min(selectedFutureWave, state.next_waves.length - 1));
@@ -1051,11 +1070,11 @@ document.addEventListener("click", event => {
   if (fanMove) moveFanInventoryStack(fanMove.dataset.fanMove, fanMove.dataset.fanTarget);
   if (event.target.closest("[data-retry-history]")) loadHistory();
 });
-$$('.nav-menu').forEach(menu => {
-  menu.addEventListener('pointerleave', () => {
-    menu.removeAttribute('open');
+if (window.matchMedia("(hover:hover) and (pointer:fine)").matches) {
+  $$(".nav-menu").forEach(menu => {
+    menu.addEventListener("pointerleave", () => menu.removeAttribute("open"));
   });
-});
+}
 document.addEventListener("dragstart", event => {
   const fanStack = event.target.closest("[data-fan-stack-id]");
   if (fanStack) {
@@ -1112,7 +1131,6 @@ $("#detail-dialog").addEventListener("click", event => {
   }
 });
 $("#detail-dialog").addEventListener("close", () => {
-  document.body.style.overflow = "";
   dialogRaceId = null;
   dialogRequest++;
 });
@@ -1140,6 +1158,18 @@ $("#logout").addEventListener("click", async () => {
   currentUser = null;
   await loadAccount();
 });
+$("#mobile-nav-toggle").addEventListener("click", () => setMobileNav(!$(".site-header").classList.contains("nav-open")));
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  const navWasOpen = $(".site-header").classList.contains("nav-open");
+  setMobileNav(false);
+  $$(".nav-menu").forEach(menu => menu.removeAttribute("open"));
+  if (navWasOpen) $("#mobile-nav-toggle").focus();
+});
+window.addEventListener("resize", () => {
+  if (window.innerWidth > 800) setMobileNav(false);
+});
+$$('dialog').forEach(dialog => dialog.addEventListener("close", syncDialogScroll));
 window.addEventListener("hashchange", changePage);
 changePage();
 loadAccount();
