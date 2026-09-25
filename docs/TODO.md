@@ -1,4 +1,5 @@
 
-1. Add more election capabilities
-    1. Change team
-1. Add onboarding modal for new players "What is Vastcar?"
+1. TODO section on what is Vast Car for created accounts
+1. Tweak distances
+1. Tweak driving calculator to be a bit more intesting
+

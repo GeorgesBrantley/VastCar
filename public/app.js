@@ -252,9 +252,7 @@ function standingsRows(race, detail = false) {
     const quantity = betFor(driver.driver_id)?.quantity || 0;
     const betCoin = quantity ? `<span class="driver-bet-coin" role="img" aria-label="${quantity} Bets" title="${quantity} Bets">🪙</span>` : "";
     const driverName = `${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}${betCoin}`;
-    const driverMarkup = detail
-      ? `<button type="button" class="standing-driver-button" data-driver="${driver.driver_id}" aria-label="Open ${escapeHTML(driver.name)} driver dossier"><i class="driver-color"></i><span class="standing-name">${driverName}</span></button>`
-      : `<span class="standing-driver"><i class="driver-color"></i><span class="standing-name">${driverName}</span></span>`;
+    const driverMarkup = `<button type="button" class="standing-driver-button" data-driver="${driver.driver_id}" aria-label="Open ${escapeHTML(driver.name)} driver dossier"><i class="driver-color"></i><span class="standing-name">${driverName}</span></button>`;
     return `<li class="standing" style="--driver-color:${driver.color}" aria-label="Position ${driver.position}, ${escapeHTML(driver.name)}, ${driver.laps} laps completed, ${driver.distance} kilometers">
     <span class="position">${String(driver.position).padStart(2, "0")}</span><span class="standing-number">${String(driver.number).padStart(2, "0")}</span>${driverMarkup}
     <span class="standing-progress">${detail ? driver.distance.toFixed(1) : `${driver.laps}<span class="tiny-progress"><i style="width:${driver.progress * 10}%"></i></span>`}</span>
@@ -490,17 +488,23 @@ function renderTracks() {
   $("#track-grid").innerHTML = filtered.length ? filtered.map(trackCard).join("") : emptyState("No tracks by that name.", "Try another track, circuit, country, or code.");
 }
 
-function openTrack(name) {
-  const track = tracks.find(item => item.name === name);
-  if (!track) return;
+async function openTrack(name) {
   dialogRaceId = null;
-  dialogRequest++;
+  const request = ++dialogRequest;
   $("#dialog-eyebrow").textContent = "CIRCUIT ARCHIVE / TRACK HISTORY";
+  $("#dialog-content").innerHTML = '<h2 id="dialog-title" class="dialog-title">Opening track archive…</h2>';
+  showDialog();
+  if (!tracks.length) await loadTracks();
+  if (request !== dialogRequest) return;
+  const track = tracks.find(item => item.name === name);
+  if (!track) {
+    $("#dialog-content").innerHTML = '<h2 id="dialog-title" class="dialog-title">Track unavailable.</h2><p class="dialog-subtitle">The circuit archive could not be reached.</p>';
+    return;
+  }
   const curveBias = track.curve_bias ?? 50;
   $("#dialog-content").innerHTML = `<h2 id="dialog-title" class="dialog-title">${escapeHTML(track.name)}</h2><p class="dialog-subtitle">${escapeHTML(track.circuit)}, ${escapeHTML(track.country)} · ${track.length.toFixed(1)} km per lap · Last 10 completed races</p>
     <div class="track-bias detail-bias" style="--curve-bias:${curveBias}%"><div><span>STRAIGHTAWAYS</span><span>CURVES</span></div><i></i></div>
     <div class="track-history"><div class="track-history-head"><span>RACE</span><span>DATE</span><span>PODIUM</span><span>FILE</span></div>${track.races.length ? track.races.map(race => `<div class="track-history-row"><div><b>${escapeHTML(race.name)}</b><small>WAVE ${String(race.wave).padStart(3, "0")}</small></div><span class="history-sub">${escapeHTML(dateLabel(race.start))}</span><div class="podium-list">${race.standings.slice(0, 3).map(driver => `<span class="history-winner" style="--driver-color:${driver.color}"><i class="driver-color"></i>${driver.position}. ${escapeHTML(driver.name)}</span>`).join("")}</div><button data-race="${race.id}" aria-label="View results for ${escapeHTML(race.name)}">↗</button></div>`).join("") : emptyState("No completed races yet.", "This track’s first podium is still out there.")}</div>`;
-  showDialog();
 }
 
 function attributeMarkup(groups) {
@@ -538,15 +542,21 @@ function renderDriverModal(driver, selectedSeason, tab = "attributes") {
     <div class="driver-tab-content">${driverTabMarkup(driver, tab)}</div></div>`;
 }
 
-function openDriver(id) {
-  const driver = drivers.find(item => item.id === id);
-  if (!driver) return;
-  const selectedSeason = driverSeasons.find(season => String(season.number) === selectedDriverSeason);
+async function openDriver(id) {
   dialogRaceId = null;
-  dialogRequest++;
+  const request = ++dialogRequest;
   $("#dialog-eyebrow").textContent = "DRIVER DOSSIER";
-  renderDriverModal(driver, selectedSeason);
+  $("#dialog-content").innerHTML = '<h2 id="dialog-title" class="dialog-title">Opening driver dossier…</h2>';
   showDialog();
+  if (!drivers.length) await loadDrivers();
+  if (request !== dialogRequest) return;
+  const driver = drivers.find(item => item.id === id);
+  if (!driver) {
+    $("#dialog-content").innerHTML = '<h2 id="dialog-title" class="dialog-title">Driver unavailable.</h2><p class="dialog-subtitle">The paddock archive could not be reached.</p>';
+    return;
+  }
+  const selectedSeason = driverSeasons.find(season => String(season.number) === selectedDriverSeason);
+  renderDriverModal(driver, selectedSeason);
 }
 
 function emptyState(title, description) {
