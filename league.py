@@ -86,6 +86,23 @@ NAMES = [
     ("Bea Caldera", "Warm Regards"), ("Luca Elsewhere", "Wrong Address"),
     ("Marisol Finch", "Lucky Teeth"), ("Robin Reverse", "Return to Sender"),
 ]
+DRIVER_INFO = {
+    "Mika Voss": ("Dolphin", "Liberal"), "Florence Zero": ("Tiger", "Moderate"),
+    "Bea Caldera": ("Bumblebee", "Progressive"), "Juno Static": ("Sea lion", "Socialist"),
+    "Basil Mercury": ("Mosquito", "Social Democrat"), "Ada Sundown": ("Fruit bat", "Liberal"),
+    "Echo Matsuda": ("Red fox", "Progressive"), "Romy Bell": ("Emu", "Moderate"),
+    "Remy Specter": ("Komodo dragon", "Democratic Socialist"), "August Nobody": ("Dog", "Liberal"),
+    "Otto Almost": ("Platypus", "Moderate"), "Luca Elsewhere": ("Parrot", "Progressive"),
+    "Sunday Graves": ("Alligator", "Socialist"), "Petra Moon": ("Barn owl", "Liberal"),
+    "Salvador Soft": ("Chinchilla", "Moderate"), "Velvet Okafor": ("Cat", "Future Liberal"),
+    "Kit Wavelength": ("Swordfish", "Fascist"), "Robin Reverse": ("Snail", "Ultra Fascist"),
+    "Milo Afterhours": ("Horse", "Discotech"), "Cassette Lee": ("Ghost horse", "Strange"),
+    "Vera Halogen": ("Panther", "Upper Management"), "Cleo Dust": ("Polar bear", "Georgist"),
+    "Felix Frequency": ("Orca", "Marxist"), "Marisol Finch": ("Rabbit", "Anti Ultra Marxist"),
+    "Nico Nightjar": ("Parakeet", "Backwards"), "Alma Atlas": ("Aardvark", "Silver Party"),
+    "Dante Moss": ("Sloth", "Vegitarian"), "Inez Voltage": ("Jellyfish", "Forwards"),
+    "Noor Solstice": ("Chicken", "Ultra Moderate Supreme"), "Penny Orbit": ("Giraffe", "Municipalist"),
+}
 COLORS = ["#eaff7b", "#bba6ff", "#ff9a76", "#8ce3d1", "#f8a6ce", "#8fbbff", "#f4cf85", "#a2caa0", "#e8b1ef", "#d3d9df"]
 TEAMS = [
     {"id": "usa", "name": "United States of America", "abbreviation": "USA", "flag": "🇺🇸", "color": "#5fa8ff"},
@@ -997,7 +1014,19 @@ class League:
             for row in self.db.execute("SELECT data FROM races WHERE season=?", (selected,)):
                 for plan in json.loads(row["data"])["plans"]:
                     starts[plan["driver_id"]] += 1
-            return [{**d, "team": self._driver_team(d), "wins": wins.get(d["id"], 0), "starts": starts.get(d["id"], 0)} for d in self.roster.values()]
+            performances = {driver_id: [] for driver_id in self.roster}
+            rows = self.db.execute("SELECT * FROM races WHERE completed=1 ORDER BY start DESC,id DESC").fetchall()
+            for row in rows:
+                data = json.loads(row["data"])
+                duration = max(plan["splits"][-1] for plan in data["plans"])
+                for standing in self._standings(data, duration):
+                    history = performances[standing["driver_id"]]
+                    if len(history) < 10:
+                        history.append({"race_number": row["season_race_number"], "season": row["season"],
+                                        "location": data["city"]["name"], "place": standing["position"]})
+            return [{**d, "team": self._driver_team(d), "wins": wins.get(d["id"], 0), "starts": starts.get(d["id"], 0),
+                     "info": {"favorite_animal": DRIVER_INFO[d["name"]][0], "political_leanings": DRIVER_INFO[d["name"]][1]},
+                     "performances": performances[d["id"]]} for d in self.roster.values()]
 
     def teams(self, season=None, sponsor_counts=None):
         """Return the ten nations with race points and their current drivers."""

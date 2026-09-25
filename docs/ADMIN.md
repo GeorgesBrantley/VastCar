@@ -18,6 +18,20 @@ Never commit a database, backup, `.env` file, or secret. The `data/` and `backup
 
 Once a production backup is started locally, the local scheduler may advance it according to the current time. It has become a development copy and must not be uploaded back to production as though it were still a pristine backup.
 
+## Outline
+
+- [Start and stop the local server](#start-and-stop-the-local-server)
+- [Update production database](#update-production-database)
+- [Start, stop, and inspect production](#start-stop-and-inspect-production)
+- [Develop and test a feature](#develop-and-test-a-feature)
+- [Back up production](#back-up-production)
+- [Restore production from a backup](#restore-production-from-a-backup)
+- [Deploy a tested feature](#deploy-a-tested-feature)
+- [Roll back bad code](#roll-back-bad-code)
+- [Secrets and security](#secrets-and-security)
+- [Expected cost](#expected-cost)
+- [Quick health checklist](#quick-health-checklist)
+
 ## Start and stop the local server
 
 Vastcar requires Python 3.9 or newer and has no package dependencies.
@@ -41,23 +55,81 @@ lsof -nP -iTCP:8000 -sTCP:LISTEN
 
 Do not run two server processes against the same SQLite file.
 
-### Refresh the local test database from production
+## Update production database
 
-First download a production backup using the procedure below. With the local server stopped, copy that backup to the development location:
+Use this section when pulling production into the local development machine, changing the database locally, and uploading the updated database back to production. This replaces the entire production database—including users, coins, bets, races, and results—so make a fresh production backup immediately before the final upload.
+
+### 1. Create a production backup
+
+Run these commands from the repository root. The first command removes any incomplete server-side copy, and the second uses SQLite's online backup API so the running production database is copied consistently:
 
 ```sh
-cp backups/vastcar-YYYY-MM-DD-HHMMSS.sqlite3 data/dev.sqlite3
-rm -f data/dev.sqlite3-wal data/dev.sqlite3-shm
+fly ssh console --app vastcar -C "rm -f /data/admin-backup.sqlite3 /data/admin-backup.sqlite3-wal /data/admin-backup.sqlite3-shm"
+fly ssh console --app vastcar -C "python -c 'import sqlite3; source=sqlite3.connect(\"/data/league.sqlite3\"); target=sqlite3.connect(\"/data/admin-backup.sqlite3\"); source.backup(target); target.close(); source.close()'"
 ```
 
-Start the local server against `data/dev.sqlite3`. The file under `backups/` remains the untouched recovery copy.
+### 2. Move the backup to the local machine
 
-For a completely fresh league, move the old development database aside and start the server again:
+Download the server-side backup into `backups/`, validate it, then remove the temporary server-side copy:
+
+```sh
+mkdir -p backups
+BACKUP_FILE="backups/vastcar-$(date +%Y-%m-%d-%H%M%S).sqlite3"
+fly ssh sftp get /data/admin-backup.sqlite3 "$BACKUP_FILE" --app vastcar
+sqlite3 "$BACKUP_FILE" "PRAGMA integrity_check;"
+fly ssh console --app vastcar -C "rm -f /data/admin-backup.sqlite3 /data/admin-backup.sqlite3-wal /data/admin-backup.sqlite3-shm"
+```
+
+The integrity check must return `ok`. Keep this downloaded file untouched as the recovery copy. Keep this terminal open through step 3 so the `BACKUP_FILE` variable remains set; otherwise replace `"$BACKUP_FILE"` with the downloaded filename.
+
+### 3. Promote the backup for local development
+
+With the local server stopped, copy the backup into the development location and clear any stale SQLite sidecar files:
+
+```sh
+cp "$BACKUP_FILE" data/dev.sqlite3
+rm -f data/dev.sqlite3-wal data/dev.sqlite3-shm
+sqlite3 data/dev.sqlite3 "PRAGMA integrity_check;"
+python3 server.py --db data/dev.sqlite3
+```
+
+Make and test the database changes locally. Stop the server gracefully with `Ctrl+C` before uploading. Do not edit or copy the database while the server is running.
+
+For a completely fresh league instead, move the old development database aside before starting the server:
 
 ```sh
 mv data/dev.sqlite3 data/dev.previous.sqlite3
 python3 server.py --db data/dev.sqlite3
 ```
+
+### 4. Upload the updated database back to production
+
+Stop the local server, validate the final database, and create a local safety copy:
+
+```sh
+cp data/dev.sqlite3 backups/vastcar-dev-$(date +%Y-%m-%d-%H%M%S).sqlite3
+sqlite3 data/dev.sqlite3 "PRAGMA integrity_check;"
+```
+
+Before uploading, repeat steps 1 and 2 to create a fresh backup of the current production database. Then upload the stopped, verified development database using the special import filename and restart production:
+
+```sh
+fly ssh sftp put \
+  data/dev.sqlite3 \
+  /data/league.import.sqlite3 \
+  --app vastcar
+fly apps restart vastcar
+```
+
+At startup, `docker-entrypoint.sh` replaces `/data/league.sqlite3` with `/data/league.import.sqlite3`; the import file is consumed once. Verify the result:
+
+```sh
+fly status --app vastcar
+fly logs --app vastcar --no-tail
+curl -f https://vastcar.fly.dev/api/state
+```
+
+If the result is wrong, use the fresh pre-upload backup with [Restore production from a backup](#restore-production-from-a-backup). Never upload a development database merely to undo a code change; deploy or roll back the code instead.
 
 ## Start, stop, and inspect production
 

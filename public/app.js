@@ -49,6 +49,7 @@ let eternalsRequest = 0;
 let finalLap = null;
 let finalLapRequest = 0;
 let pendingFinalLapChoice = null;
+let accountRequest = 0;
 
 function setMobileNav(open) {
   const header = $(".site-header");
@@ -116,14 +117,17 @@ async function api(path) {
 }
 
 async function loadAccount() {
+  const request = ++accountRequest;
   try {
     const data = await api("/api/auth/me");
+    if (request !== accountRequest) return;
     currentUser = data.user;
     const login = $("#login");
     const register = $("#register");
     const name = $("#account-name");
     const logout = $("#logout");
     const portalNav = $("#portal-nav");
+    $("#header-coin-value").textContent = Number(currentUser?.coin || 0).toLocaleString();
     if (currentUser) {
       name.textContent = currentUser.username;
       name.hidden = false;
@@ -148,6 +152,8 @@ async function loadAccount() {
     if (page === "tower") renderTower();
     if (page === "eternals") renderEternals();
     if (page === "final-lap") loadFinalLap();
+    const requestedPage = location.hash.slice(1);
+    if (currentUser && ["fan", "tower", "eternals"].includes(requestedPage) && page !== requestedPage) changePage();
   } catch (_) { /* The normal connection indicator covers unavailable servers. */ }
 }
 
@@ -245,8 +251,12 @@ function standingsRows(race, detail = false) {
   return race.standings.map(driver => {
     const quantity = betFor(driver.driver_id)?.quantity || 0;
     const betCoin = quantity ? `<span class="driver-bet-coin" role="img" aria-label="${quantity} Bets" title="${quantity} Bets">🪙</span>` : "";
+    const driverName = `${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}${betCoin}`;
+    const driverMarkup = detail
+      ? `<button type="button" class="standing-driver-button" data-driver="${driver.driver_id}" aria-label="Open ${escapeHTML(driver.name)} driver dossier"><i class="driver-color"></i><span class="standing-name">${driverName}</span></button>`
+      : `<span class="standing-driver"><i class="driver-color"></i><span class="standing-name">${driverName}</span></span>`;
     return `<li class="standing" style="--driver-color:${driver.color}" aria-label="Position ${driver.position}, ${escapeHTML(driver.name)}, ${driver.laps} laps completed, ${driver.distance} kilometers">
-    <span class="position">${String(driver.position).padStart(2, "0")}</span><span class="standing-number">${String(driver.number).padStart(2, "0")}</span><span class="standing-driver"><i class="driver-color"></i><span class="standing-name">${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}${betCoin}</span></span>
+    <span class="position">${String(driver.position).padStart(2, "0")}</span><span class="standing-number">${String(driver.number).padStart(2, "0")}</span>${driverMarkup}
     <span class="standing-progress">${detail ? driver.distance.toFixed(1) : `${driver.laps}<span class="tiny-progress"><i style="width:${driver.progress * 10}%"></i></span>`}</span>
     <span class="standing-gap">${driver.position === 1 ? (driver.finished ? "WINNER" : "LEADER") : `+${driver.gap.toFixed(1)}`}</span></li>`;
   }).join("");
@@ -283,8 +293,8 @@ function updateTrack(root, race) {
 function raceCard(race) {
   return `<article class="race-card" id="race-${race.id}">
     <div class="race-card-head"><div class="race-meta"><span>RACE ${String(race.race_number).padStart(2, "0")} <span class="divider-dot">/</span> <span class="city-code">${race.city.code}</span></span><span class="race-status"><i></i><span>LIVE</span></span></div>
-    <h3>${escapeHTML(race.name)}</h3><div class="city-line"><span class="flag">⌁</span> ${escapeHTML(race.city.circuit)}</div></div>
-    ${trackMarkup(race)}<div class="track-caption"><span>${escapeHTML(race.city.circuit).toUpperCase()}</span><span>${race.city.length.toFixed(1)} KM / LAP</span></div>
+    <h3>${escapeHTML(race.name)}</h3><button type="button" class="city-line track-link" data-track="${escapeHTML(race.city.name)}" aria-label="Open ${escapeHTML(race.city.name)} track history"><span class="flag">⌁</span> ${escapeHTML(race.city.circuit)}</button></div>
+    ${trackMarkup(race)}<div class="track-caption"><span>${race.city.length.toFixed(1)} KM / LAP</span></div>
     ${standingsMarkup(race)}<div class="race-card-foot"><span class="micro race-clock">RACE CLOCK 00:00</span><button class="text-button" data-race="${race.id}">Follow race <span>↗</span></button></div>
     </article>`;
 }
@@ -309,6 +319,7 @@ function nextRaceCard(race) {
 }
 
 function renderLive() {
+  $("#header-coin-value").textContent = Number(currentUser?.coin || 0).toLocaleString();
   if (!state) return;
   const grid = $("#race-grid");
   const raceSignature = state.races.length ? String(state.wave) : `empty:${state.next_start}`;
@@ -506,6 +517,27 @@ function modifierMarkup(modifiers) {
   }).join("")}</div>`;
 }
 
+function driverTabMarkup(driver, tab) {
+  if (tab === "history") {
+    const rows = driver.performances || [];
+    return `<section class="driver-tab-panel"><div class="driver-history-head"><span>RACE #</span><span>LOCATION</span><span>PLACE</span></div>${rows.length ? rows.map(performance => `<div class="driver-history-row"><span>#${performance.race_number}</span><span>${escapeHTML(performance.location)}</span><b>P${performance.place}</b></div>`).join("") : `<p class="profile-footnote">No completed races in this driver’s archive yet.</p>`}</section>`;
+  }
+  if (tab === "info") {
+    const info = driver.info || {};
+    return `<section class="driver-tab-panel driver-info"><div><span>FAVORITE ANIMAL</span><b>${escapeHTML(info.favorite_animal || "Unknown")}</b></div><div><span>POLITICAL LEANINGS</span><b>${escapeHTML(info.political_leanings || "Unfiled")}</b></div></section>`;
+  }
+  return `<div class="profile-car">${carSVG(driver.color, driver.number)}<div><div class="eyebrow">THE MACHINE</div><h3>${escapeHTML(driver.car.name)}</h3>${modifierMarkup(driver.car.modifiers)}</div></div>
+    <div class="stat-sections"><section class="stat-column"><h3>01 / DRIVER ATTRIBUTES</h3>${attributeMarkup(driver.attributes)}</section><section class="stat-column"><h3>02 / CAR ATTRIBUTES</h3>${attributeMarkup(driver.car.attributes)}</section></div>`;
+}
+
+function renderDriverModal(driver, selectedSeason, tab = "attributes") {
+  const tabs = [["attributes", "Attributes"], ["history", "History"], ["info", "Info"]];
+  $("#dialog-content").innerHTML = `<div class="driver-dossier" style="--driver-color:${driver.color}">
+    <div class="profile-header"><div><h2 id="dialog-title" class="dialog-title">${escapeHTML(driver.name)}</h2><p class="dialog-subtitle">${driver.team.flag} <span class="profile-team" style="--team-color:${driver.team.color}">${escapeHTML(driver.team.name)} (${escapeHTML(driver.team.abbreviation)})</span> <span class="divider-dot">/</span> ${escapeHTML(selectedSeason?.name || "Current")} season <span class="divider-dot">/</span> ${driver.wins} wins <span class="divider-dot">/</span> ${driver.starts} starts</p>${modifierMarkup(driver.modifiers)}</div><span class="profile-number">${driver.number}</span></div>
+    <div class="driver-modal-tabs" role="tablist" aria-label="${escapeHTML(driver.name)} dossier"><div>${tabs.map(([id, label]) => `<button type="button" role="tab" aria-selected="${tab === id}" class="${tab === id ? "active" : ""}" data-driver-modal-tab="${id}" data-driver-modal-id="${driver.id}">${label}</button>`).join("")}</div></div>
+    <div class="driver-tab-content">${driverTabMarkup(driver, tab)}</div></div>`;
+}
+
 function openDriver(id) {
   const driver = drivers.find(item => item.id === id);
   if (!driver) return;
@@ -513,10 +545,7 @@ function openDriver(id) {
   dialogRaceId = null;
   dialogRequest++;
   $("#dialog-eyebrow").textContent = "DRIVER DOSSIER";
-  $("#dialog-content").innerHTML = `<div style="--driver-color:${driver.color}">
-    <div class="profile-header"><div><h2 id="dialog-title" class="dialog-title">${escapeHTML(driver.name)}</h2><p class="dialog-subtitle">${driver.team.flag} <span class="profile-team" style="--team-color:${driver.team.color}">${escapeHTML(driver.team.name)} (${escapeHTML(driver.team.abbreviation)})</span> <span class="divider-dot">/</span> ${escapeHTML(selectedSeason?.name || "Current")} season <span class="divider-dot">/</span> ${driver.wins} wins <span class="divider-dot">/</span> ${driver.starts} starts</p>${modifierMarkup(driver.modifiers)}</div><span class="profile-number">${driver.number}</span></div>
-    <div class="profile-car">${carSVG(driver.color, driver.number)}<div><div class="eyebrow">THE MACHINE</div><h3>${escapeHTML(driver.car.name)}</h3>${modifierMarkup(driver.car.modifiers)}</div></div>
-    <div class="stat-sections"><section class="stat-column"><h3>01 / DRIVER ATTRIBUTES</h3>${attributeMarkup(driver.attributes)}</section><section class="stat-column"><h3>02 / CAR ATTRIBUTES</h3>${attributeMarkup(driver.car.attributes)}</section></div></div>`;
+  renderDriverModal(driver, selectedSeason);
   showDialog();
 }
 
@@ -535,6 +564,7 @@ function sponsorChangeLabel() {
 }
 
 function renderFanPage() {
+  $("#header-coin-value").textContent = Number(currentUser?.coin || 0).toLocaleString();
   if (!currentUser) return;
   $("#fan-title").textContent = currentUser.username;
   $("#fan-coin-value").textContent = Number(currentUser.coin || 0).toLocaleString();
@@ -550,7 +580,7 @@ function renderFanPage() {
     if (!stack) return `<div class="fan-slot ${active ? "" : "inactive"}" data-fan-drop-area="${active ? "active" : "stash"}" data-fan-drop-index="${index}"><span>${String(index + 1).padStart(2, "0")}</span><i>EMPTY</i></div>`;
     const item = towerItems.find(entry => entry.id === stack.item);
     const destination = active ? "stash" : "active";
-    const description = active ? "" : `<p class="fan-item-description">${escapeHTML(item.effect)}</p>`;
+    const description = `<p class="fan-item-description">${escapeHTML(item.effect)}</p>`;
     return `<div class="fan-slot fan-item-slot ${active ? "" : "inactive"}" draggable="true" data-fan-stack-id="${stack.id}" data-fan-drop-area="${active ? "active" : "stash"}" data-fan-drop-index="${index}"><span>${String(index + 1).padStart(2, "0")}</span><b>${item.icon} ${escapeHTML(item.name)}</b><i>×${stack.quantity} / 10</i>${description}<button data-fan-move="${stack.id}" data-fan-target="${destination}">Move to ${destination}</button></div>`;
   }).join("");
   const driverName = driverId => drivers.find(driver => driver.id === Number(driverId))?.name || `Driver ${driverId}`;
@@ -665,6 +695,7 @@ function towerSlotMarkup(active, limit) {
 }
 
 function renderTower() {
+  $("#header-coin-value").textContent = Number(currentUser?.coin || 0).toLocaleString();
   if (!currentUser) return;
   if (!inventoryDraft) inventoryDraft = copyInventory(currentUser.inventory);
   $("#tower-coin-value").textContent = Number(currentUser.coin || 0).toLocaleString();
@@ -914,6 +945,7 @@ async function loadFinalLap() {
 }
 
 function renderFinalLap() {
+  $("#header-coin-value").textContent = Number(currentUser?.coin || 0).toLocaleString();
   if (page !== "final-lap" || !finalLap) return;
   const root = $("#final-lap-content");
   if (!finalLap.winner) {
@@ -1072,6 +1104,7 @@ document.addEventListener("click", event => {
   const sponsor = event.target.closest("[data-sponsor-team]");
   const openSponsor = event.target.closest("[data-open-sponsor]");
   const driverViewTab = event.target.closest("[data-driver-view]");
+  const driverModalTab = event.target.closest("[data-driver-modal-tab]");
   const driver = event.target.closest("[data-driver]");
   const race = event.target.closest("[data-race]");
   const track = event.target.closest("[data-track]");
@@ -1086,7 +1119,13 @@ document.addEventListener("click", event => {
   const finalLapVote = event.target.closest("[data-final-lap-vote]");
   const finalLapSubmit = event.target.closest("[data-final-lap-submit]");
   const pitCrewEntry = event.target.closest("[data-buy-pit-entry]");
-  if (event.target.closest("#primary-nav a")) setMobileNav(false);
+  const navLink = event.target.closest("#primary-nav a");
+  if (navLink) {
+    setMobileNav(false);
+    // Clicking the current hash normally does not emit hashchange. Re-run the
+    // router so a protected page can recover from an in-flight account lookup.
+    if (location.hash === navLink.getAttribute("href")) changePage();
+  }
   if (waveNav && state?.next_waves?.length) {
     selectedFutureWave += waveNav.dataset.waveNav === "next" ? 1 : -1;
     selectedFutureWave = Math.max(0, Math.min(selectedFutureWave, state.next_waves.length - 1));
@@ -1105,6 +1144,13 @@ document.addEventListener("click", event => {
   if (driverViewTab) {
     driverView = driverViewTab.dataset.driverView;
     renderDrivers();
+  }
+  if (driverModalTab) {
+    const selected = drivers.find(item => item.id === Number(driverModalTab.dataset.driverModalId));
+    if (selected) {
+      const selectedSeason = driverSeasons.find(season => String(season.number) === selectedDriverSeason);
+      renderDriverModal(selected, selectedSeason, driverModalTab.dataset.driverModalTab);
+    }
   }
   if (bet && !bet.disabled) placeBet(bet);
   if (driver) openDriver(Number(driver.dataset.driver));
