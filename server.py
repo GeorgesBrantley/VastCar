@@ -84,6 +84,7 @@ class Handler(SimpleHTTPRequestHandler):
                         result = self.auth.finalize_election(season)
                         self.league.apply_pit_outcomes(season, result["pit_crew"])
                     election["amendments"] = self.auth.final_lap_poll(season, user["id"] if user else None)
+                    election["pit_crew_options"] = self.auth.pit_crew_options(season)
                     election["pit_crew"] = self.auth.pit_crew_ticket_count(season, user["id"] if user else None)
                     election["result"] = self.enrich_election_result(self.auth.final_lap_result(season))
                     election["drivers"] = [

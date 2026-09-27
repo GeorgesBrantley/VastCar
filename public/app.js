@@ -72,7 +72,7 @@ function openModal(dialog) {
 const finalLapChoices = [
   { id: "weather", title: "Weather" },
   { id: "advertising", title: "Advertising" },
-  { id: "explosions", title: "Explosions" },
+  { id: "balance", title: "Balance" },
 ];
 
 const pitCrewActions = [
@@ -254,9 +254,9 @@ function standingsRows(race, detail = false) {
     const driverName = `${escapeHTML(driver.name)}${favoriteHeart(driver.driver_id)} ${teamBadge(driver.team)}${betCoin}`;
     const driverMarkup = `<button type="button" class="standing-driver-button" data-driver="${driver.driver_id}" aria-label="Open ${escapeHTML(driver.name)} driver dossier"><i class="driver-color"></i><span class="standing-name">${driverName}</span></button>`;
     return `<li class="standing" style="--driver-color:${driver.color}" aria-label="Position ${driver.position}, ${escapeHTML(driver.name)}, ${driver.laps} laps completed, ${driver.distance} kilometers">
-    <span class="position">${String(driver.position).padStart(2, "0")}</span><span class="standing-number">${String(driver.number).padStart(2, "0")}</span>${driverMarkup}
+    <span class="position">${driver.retired ? "N/A" : String(driver.position).padStart(2, "0")}</span><span class="standing-number">${String(driver.number).padStart(2, "0")}</span>${driverMarkup}
     <span class="standing-progress">${detail ? driver.distance.toFixed(1) : `${driver.laps}<span class="tiny-progress"><i style="width:${driver.progress * 10}%"></i></span>`}</span>
-    <span class="standing-gap">${driver.position === 1 ? (driver.finished ? "WINNER" : "LEADER") : `+${driver.gap.toFixed(1)}`}</span></li>`;
+    <span class="standing-gap">${driver.retired ? "N/A Finish" : driver.position === 1 ? (driver.finished ? "WINNER" : "LEADER") : `+${driver.gap.toFixed(1)}`}</span></li>`;
   }).join("");
 }
 
@@ -284,6 +284,7 @@ function updateTrack(root, race) {
     $("title", marker).textContent = `P${driver.position} · ${driver.name} · ${driver.laps}/10 laps · ${driver.distance} km`;
   }
   const leader = race.standings[0];
+  if (!leader) return;
   $(".lap-value", root).innerHTML = `${String(Math.min(10, leader.laps + 1)).padStart(2, "0")} <small>/ 10</small>`;
   $(".lap-display .micro", root).textContent = race.status === "finished" ? "CHECKERED FLAG" : leader.finished ? "LEADER FINISHED" : "LEADER LAP";
 }
@@ -344,7 +345,7 @@ function renderLive() {
   $("#betting-coin-value").textContent = Number(currentUser?.coin || 0).toLocaleString();
   const nextGrid = $("#next-race-grid");
   const selectedRaces = selectedWave?.races || [];
-  const nextSignature = `${state.wave}:${selectedFutureWave}:${selectedWave?.start || "none"}:${state.completed_races}:${currentUser?.coin ?? "guest"}:${currentUser?.sponsored_team || "none"}:${JSON.stringify(state.bets || [])}`;
+  const nextSignature = `${state.wave}:${selectedFutureWave}:${selectedWave?.start || "none"}:${state.completed_races}:${currentUser?.coin ?? "guest"}:${currentUser?.sponsored_team || "none"}:${JSON.stringify(state.bets || [])}:${JSON.stringify(selectedRaces.map(race => race.racers.map(driver => driver.driver_id)))}`;
   if (nextGrid.dataset.signature !== nextSignature) {
     nextGrid.innerHTML = selectedRaces.length ? selectedRaces.map(nextRaceCard).join("") : emptyState("The grid is not public yet.", "Championship entries appear when the preceding round has decided them.");
     nextGrid.dataset.signature = nextSignature;
@@ -508,36 +509,46 @@ async function openTrack(name) {
 }
 
 function attributeMarkup(groups) {
-  return groups.map(group => `<div class="attribute-group"><div class="attribute-heading"><span>${escapeHTML(group.name)}</span><b>${group.value}<span class="muted"> / 100</span></b></div>${group.stats.map(stat => ["Eyes", "Wheels"].includes(stat.name)
-    ? `<div class="stat-row raw-stat"><span>${escapeHTML(stat.name)}</span><span>${stat.value}</span></div>`
-    : `<div class="stat-row"><span>${escapeHTML(stat.name)}</span><span class="stat-bar"><i style="width:${stat.value}%"></i></span><span>${stat.value}</span></div>`).join("")}</div>`).join("");
+  return groups.map(group => `<div class="attribute-group"><div class="attribute-heading"><span>${escapeHTML(group.name)}</span><b>${group.value}<span class="muted"> / 100</span></b></div>${group.stats.map(stat => {
+    const original = stat.original_value ?? stat.value;
+    const effective = stat.effective_value ?? stat.value;
+    const delta = effective - original;
+    const changed = delta !== 0;
+    const direction = delta > 0 ? "increase" : "decrease";
+    const maximum = stat.name === "Eyes" ? 8 : stat.name === "Wheels" ? 10 : Math.max(100, original, effective);
+    const position = value => Math.max(0, Math.min(100, value / maximum * 100));
+    const start = position(Math.min(original, effective));
+    const width = Math.abs(position(effective) - position(original));
+    const description = `${stat.name}: ${original}${changed ? ` → ${effective} (${delta > 0 ? "+" : ""}${delta})` : ""}`;
+    return `<div class="stat-row${changed ? " changed-stat" : ""}"><span>${escapeHTML(stat.name)}</span><span class="stat-bar" role="img" aria-label="${escapeHTML(description)}" title="${escapeHTML(description)}"><i style="width:${position(original)}%"></i>${changed ? `<i class="stat-change ${direction}" style="left:${start}%;width:${width}%"></i><i class="stat-original-marker" style="left:${position(original)}%"></i>` : ""}</span><span class="stat-values">${changed ? `<span class="stat-original">${original}</span><span class="stat-effective ${direction}">→ ${effective}</span>` : effective}</span></div>`;
+  }).join("")}</div>`).join("");
 }
 
 function modifierMarkup(modifiers) {
   if (!modifiers?.length) return "";
   return `<div class="modifier-list" aria-label="Modifiers">${modifiers.map(modifier => {
     const description = escapeHTML(modifier.description || "");
-    return `<span class="modifier-box" tabindex="0" title="${description}" aria-label="${escapeHTML(modifier.name)}: ${description}">${escapeHTML(modifier.name)}</span>`;
+    return `<span class="modifier-box" tabindex="0" title="${escapeHTML(modifier.name)}: ${description}" aria-label="${escapeHTML(modifier.name)}: ${description}">${escapeHTML(modifier.name)}</span>`;
   }).join("")}</div>`;
 }
 
 function driverTabMarkup(driver, tab) {
   if (tab === "history") {
     const rows = driver.performances || [];
-    return `<section class="driver-tab-panel"><div class="driver-history-head"><span>RACE #</span><span>LOCATION</span><span>PLACE</span></div>${rows.length ? rows.map(performance => `<div class="driver-history-row"><span>#${performance.race_number}</span><span>${escapeHTML(performance.location)}</span><b>P${performance.place}</b></div>`).join("") : `<p class="profile-footnote">No completed races in this driver’s archive yet.</p>`}</section>`;
+    return `<section class="driver-tab-panel"><div class="driver-history-head"><span>RACE #</span><span>LOCATION</span><span>PLACE</span></div>${rows.length ? rows.map(performance => `<div class="driver-history-row"><span>#${performance.race_number}</span><span>${escapeHTML(performance.location)}</span><b>${performance.place === "N/A" ? "N/A Finish" : `P${performance.place}`}</b></div>`).join("") : `<p class="profile-footnote">No completed races in this driver’s archive yet.</p>`}</section>`;
   }
   if (tab === "info") {
     const info = driver.info || {};
-    return `<section class="driver-tab-panel driver-info"><div><span>FAVORITE ANIMAL</span><b>${escapeHTML(info.favorite_animal || "Unknown")}</b></div><div><span>POLITICAL LEANINGS</span><b>${escapeHTML(info.political_leanings || "Unfiled")}</b></div></section>`;
+    return `<section class="driver-tab-panel driver-info"><div><span>FAVORITE ANIMAL</span><b>${escapeHTML(info.favorite_animal || "Unknown")}</b></div><div><span>POLITICAL LEANINGS</span><b>${escapeHTML(info.political_leanings || "Unfiled")}</b></div><section class="driver-effect-history" aria-label="Raffle effect history"><h3>RAFFLE EFFECTS</h3>${info.effects?.length ? `<ol>${info.effects.map(effect => `<li><span>Season ${effect.season} / ${escapeHTML(effect.season_name)}</span><b>${escapeHTML(pitCrewActions.find(action => action.id === effect.action)?.title || effect.action)}</b></li>`).join("")}</ol>` : `<p>No selected raffle effects yet.</p>`}</section></section>`;
   }
-  return `<div class="profile-car">${carSVG(driver.color, driver.number)}<div><div class="eyebrow">THE MACHINE</div><h3>${escapeHTML(driver.car.name)}</h3>${modifierMarkup(driver.car.modifiers)}</div></div>
-    <div class="stat-sections"><section class="stat-column"><h3>01 / DRIVER ATTRIBUTES</h3>${attributeMarkup(driver.attributes)}</section><section class="stat-column"><h3>02 / CAR ATTRIBUTES</h3>${attributeMarkup(driver.car.attributes)}</section></div>`;
+  return `<div class="profile-car">${carSVG(driver.color, driver.number)}<div><div class="eyebrow">THE MACHINE</div><h3>${escapeHTML(driver.car.name)}</h3></div></div>
+    <div class="stat-sections"><section class="stat-column"><h3>01 / DRIVER ATTRIBUTES</h3>${modifierMarkup(driver.modifiers)}${attributeMarkup(driver.attributes)}</section><section class="stat-column"><h3>02 / CAR ATTRIBUTES</h3>${modifierMarkup(driver.car.modifiers)}${attributeMarkup(driver.car.attributes)}</section></div>`;
 }
 
 function renderDriverModal(driver, selectedSeason, tab = "attributes") {
   const tabs = [["attributes", "Attributes"], ["history", "History"], ["info", "Info"]];
   $("#dialog-content").innerHTML = `<div class="driver-dossier" style="--driver-color:${driver.color}">
-    <div class="profile-header"><div><h2 id="dialog-title" class="dialog-title">${escapeHTML(driver.name)}</h2><p class="dialog-subtitle">${driver.team.flag} <span class="profile-team" style="--team-color:${driver.team.color}">${escapeHTML(driver.team.name)} (${escapeHTML(driver.team.abbreviation)})</span> <span class="divider-dot">/</span> ${escapeHTML(selectedSeason?.name || "Current")} season <span class="divider-dot">/</span> ${driver.wins} wins <span class="divider-dot">/</span> ${driver.starts} starts</p>${modifierMarkup(driver.modifiers)}</div><span class="profile-number">${driver.number}</span></div>
+    <div class="profile-header"><div><h1 id="dialog-title" class="dialog-title">${escapeHTML(driver.name)}</h1><p class="dialog-subtitle">${driver.team.flag} <span class="profile-team" style="--team-color:${driver.team.color}">${escapeHTML(driver.team.name)} (${escapeHTML(driver.team.abbreviation)})</span> <span class="divider-dot">/</span> ${escapeHTML(selectedSeason?.name || "Current")} season <span class="divider-dot">/</span> ${driver.wins} wins <span class="divider-dot">/</span> ${driver.starts} starts</p></div><span class="profile-number">${driver.number}</span></div>
     <div class="driver-modal-tabs" role="tablist" aria-label="${escapeHTML(driver.name)} dossier"><div>${tabs.map(([id, label]) => `<button type="button" role="tab" aria-selected="${tab === id}" class="${tab === id ? "active" : ""}" data-driver-modal-tab="${id}" data-driver-modal-id="${driver.id}">${label}</button>`).join("")}</div></div>
     <div class="driver-tab-content">${driverTabMarkup(driver, tab)}</div></div>`;
 }
@@ -853,7 +864,8 @@ async function loadHistory() {
     const filtered = params.get("q") || params.get("city");
     $("#history-list").innerHTML = data.races.length ? `<table class="history-table"><thead><tr><th>RACE / START TIME</th><th>LOCATION</th><th>WINNER / MACHINE</th><th>WINNING TIME</th><th><span class="micro">FILE</span></th></tr></thead><tbody>${data.races.map(race => {
       const winner = race.standings[0];
-      return `<tr><td><span class="history-name">${escapeHTML(race.name)}</span><span class="history-sub">${escapeHTML(dateLabel(race.start))} · WAVE ${String(race.wave).padStart(3, "0")}</span></td><td>${escapeHTML(race.city.name)}<span class="history-sub">${(race.city.length * 10).toFixed(1)} KM / 10 LAPS</span></td><td><span class="history-winner" style="--driver-color:${winner.color}"><i class="driver-color"></i>${escapeHTML(winner.name)}</span><span class="history-sub">${escapeHTML(winner.car)}</span></td><td class="history-time">${preciseTime(winner.finish_time)}</td><td><button data-race="${race.id}" aria-label="View results for ${escapeHTML(race.name)}">↗</button></td></tr>`;
+      if (!winner) return `<tr><td>${escapeHTML(race.name)}</td><td>${escapeHTML(race.city.name)}</td><td>No available racers</td><td>N/A Finish</td><td><button data-race="${race.id}">↗</button></td></tr>`;
+      return `<tr><td><span class="history-name">${escapeHTML(race.name)}</span><span class="history-sub">${escapeHTML(dateLabel(race.start))} · WAVE ${String(race.wave).padStart(3, "0")}</span></td><td>${escapeHTML(race.city.name)}<span class="history-sub">${(race.city.length * 10).toFixed(1)} KM / 10 LAPS</span></td><td><span class="history-winner" style="--driver-color:${winner.color}"><i class="driver-color"></i>${winner.finished ? escapeHTML(winner.name) : "No finisher"}</span><span class="history-sub">${escapeHTML(winner.car)}</span></td><td class="history-time">${winner.finished ? preciseTime(winner.finish_time) : "N/A Finish"}</td><td><button data-race="${race.id}" aria-label="View results for ${escapeHTML(race.name)}">↗</button></td></tr>`;
     }).join("")}</tbody></table>` : emptyState(filtered ? "No races on this frequency." : "The ink is still dry.", filtered ? "Try another race name or location." : 'The first results will arrive when all ten drivers finish. Until then, <a href="#live">meet us at the circuit ↗</a>');
     $("#pagination").innerHTML = data.total ? `<button data-history-page="${data.page - 1}" ${data.page === 1 ? "disabled" : ""}>← Previous</button><span>${data.page} / ${data.pages} · ${data.total} RACES</span><button data-history-page="${data.page + 1}" ${data.page === data.pages ? "disabled" : ""}>Next →</button>` : "";
   } catch (_) {
@@ -985,8 +997,8 @@ function electionMarkup(election) {
       <p id="final-lap-vote-status" class="election-status" role="status" aria-live="polite">${savedSelection ? "Your amendment vote is locked in." : pendingFinalLapChoice ? "Your selection is ready. Cast your vote when you’re ready." : currentUser ? "Choose an amendment, then cast your vote." : "Log in to cast an amendment vote."}</p>
     </div>
     <div class="election-group"><div class="election-group-head"><div><span>02 / SPONSOR HELP</span><strong>Lend your support or disgust to our Eternal Racers</strong></div><small>10 COIN / ENTRY</small></div>
-      <p class="pit-explanation">Every purchase adds one raffle entry. The Administration draws up to ten unique changes when voting closes; duplicate drawn choices are discarded.</p>
-      <div class="pit-action-grid">${pitCrewActions.map(action => `<div class="pit-action" data-pit-action-card="${action.id}"><div><b>${escapeHTML(action.title)}</b><p>${escapeHTML(action.detail)}</p></div><label>DRIVER<select data-pit-target-a>${driverOptions}</select></label>${action.targets === 2 ? `<label>SECOND DRIVER<select data-pit-target-b>${driverOptions}</select></label>` : ""}<label>BALLOTS<input type="number" min="1" max="${currentUser ? Math.floor(currentUser.coin / 10) : 0}" value="1" data-pit-quantity ${!currentUser ? "disabled" : ""}></label><button type="button" data-buy-pit-entry="${action.id}" ${!currentUser || currentUser.coin < 10 ? "disabled" : ""}>ADD BALLOTS · 10 COIN EACH</button></div>`).join("")}</div>
+      <p class="pit-explanation">Five actions are randomly selected for each election. Each action has its own raffle: every purchased ballot is one entry, and one outcome is drawn per action when voting closes. Actions with no entries produce no change.</p>
+      <div class="pit-action-grid">${(election.pit_crew_options || []).map(id => pitCrewActions.find(action => action.id === id)).filter(Boolean).map(action => `<div class="pit-action" data-pit-action-card="${action.id}"><div><b>${escapeHTML(action.title)}</b><p>${escapeHTML(action.detail)}</p></div><label>DRIVER<select data-pit-target-a>${driverOptions}</select></label>${action.targets === 2 ? `<label>SECOND DRIVER<select data-pit-target-b>${driverOptions}</select></label>` : ""}<label>BALLOTS<input type="number" min="1" max="${currentUser ? Math.floor(currentUser.coin / 10) : 0}" value="1" data-pit-quantity ${!currentUser ? "disabled" : ""}></label><button type="button" data-buy-pit-entry="${action.id}" ${!currentUser || currentUser.coin < 10 ? "disabled" : ""}>ADD BALLOTS · 10 COIN EACH</button></div>`).join("")}</div>
       <p id="pit-crew-status" class="election-status" role="status" aria-live="polite">${currentUser ? `${election.pit_crew.mine} of your entries · ${currentUser.coin} Coin available` : "Log in to buy Sponsor Help entries."}</p>
     </div>
   </section>`;
@@ -994,10 +1006,13 @@ function electionMarkup(election) {
 
 function electionResultsMarkup(election) {
   const result = election.result || { amendments: {}, pit_crew: [] };
+  const resultChoices = Object.keys(result.amendments).map(id => ({
+    id, title: id === "explosions" ? "Explosions" : finalLapChoices.find(choice => choice.id === id)?.title || id,
+  }));
   const total = Object.values(result.amendments).reduce((sum, value) => sum + value, 0);
   const actionName = id => pitCrewActions.find(action => action.id === id)?.title || id;
   return `<section class="election-window election-results"><div class="election-intro"><p class="eyebrow">VOTING CLOSED · SEASON ${String(election.season).padStart(2, "0")}</p><div class="election-title">The results are in.</div><p>The Final Lap will lock Tuesday. The next election is revealed Thursday.</p></div>
-    <div class="election-group"><div class="election-group-head"><div><span>01 / VASTCAR AMENDMENTS</span><strong>Final vote</strong></div><small>${total} ${total === 1 ? "VOTE" : "VOTES"}</small></div><div class="result-list">${finalLapChoices.map(choice => { const votes = result.amendments[choice.id] || 0; return `<div><b>${escapeHTML(choice.title)}</b><span>${votes} · ${total ? Math.round(votes / total * 100) : 0}%</span></div>`; }).join("")}</div></div>
+    <div class="election-group"><div class="election-group-head"><div><span>01 / VASTCAR AMENDMENTS</span><strong>Final vote</strong></div><small>${total} ${total === 1 ? "VOTE" : "VOTES"}</small></div><div class="result-list">${resultChoices.map(choice => { const votes = result.amendments[choice.id] || 0; return `<div><b>${escapeHTML(choice.title)}</b><span>${votes} · ${total ? Math.round(votes / total * 100) : 0}%</span></div>`; }).join("")}</div></div>
     <div class="election-group"><div class="election-group-head"><div><span>02 / SPONSOR HELP</span><strong>Changes selected by raffle</strong></div><small>${result.pit_crew.length} SELECTED</small></div><div class="pit-results">${result.pit_crew.length ? result.pit_crew.map((outcome, index) => `<div><span>${String(index + 1).padStart(2, "0")}</span><b>${escapeHTML(actionName(outcome.action))}</b><p>${escapeHTML(outcome.target_a_name)}${outcome.target_b_name ? ` ↔ ${escapeHTML(outcome.target_b_name)}` : ""}</p></div>`).join("") : "<p>No Sponsor Help changes were entered.</p>"}</div></div>
   </section>`;
 }

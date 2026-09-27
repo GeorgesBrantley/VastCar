@@ -26,15 +26,15 @@ The options are vague on person, do not elaborate.
 Current Options:
 - Weather
 - Advertising
-- Explosions
+- Balance
 
 
 ### Sponsor Help
 "Lend your support or disgust to our Eternal Racers"
 
-Users buy these options for 10 coint a pop. Each 'bought' instance is a raffle added to the final selection. The Administration will chose 10 of these changes by raffle, but duplicate choices will be ignored
+Each election offers five randomly selected actions from the pool below. The same five options remain available to everyone throughout that election.
 
-For insance, if "Improve Driver X" is inputted twice, and "Hurt Driver Y" is inputted once, if "Improve Driver X" Is selected first, if the other 'ticket' is selected again it is junked and ignored. 
+Users buy entries for 10 Coin each. Each action is its own raffle: when voting closes, one purchased entry is randomly selected for each action that has entries. Multiple entries increase the chance of that driver selection winning within its action. An action with no entries produces no change, so there are at most five outcomes.
 
 Feel free to use a modal to help with selection.
 

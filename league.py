@@ -423,6 +423,7 @@ class League:
         return [
             plan["driver_id"]
             for plan in sorted(data["plans"], key=lambda plan: (plan["splits"][-1], plan["grid"]))
+            if "retired_at" not in plan
         ]
 
     def _championship_rows(self, season_number, season_slot):
@@ -469,6 +470,83 @@ class League:
     def _driver_team(self, driver):
         return self._team_public(TEAM_BY_ID[driver["team_id"]])
 
+    def _available_grid(self, driver_ids, season_number, season_slot, public=False):
+        """Recovery lasts for the driver's next scheduled race opportunities."""
+        target = (season_number - 1) * SLOTS_PER_SEASON + season_slot
+        unavailable = set()
+        for row in self.db.execute(
+            "SELECT season,season_slot,start,data FROM races WHERE season>0 AND "
+            "(season<? OR (season=? AND season_slot<?)) AND "
+            "(season - 1) * ? + season_slot >= ?",
+            (season_number, season_number, season_slot, SLOTS_PER_SEASON, target - 3),
+        ):
+            source = (row["season"] - 1) * SLOTS_PER_SEASON + row["season_slot"]
+            if target - source > 3:
+                continue
+            for plan in json.loads(row["data"])["plans"]:
+                if public and row["start"] + plan.get("retired_at", float("inf")) > self.clock():
+                    continue
+                if source + plan.get("missed_races", 0) >= target:
+                    unavailable.add(plan["driver_id"])
+        return [driver_id for driver_id in driver_ids if driver_id not in unavailable]
+
+    def _crash_event(self, plans, race_stats, rng):
+        """One initiating incident on average every three baseline races."""
+        if not plans:
+            return
+        risks = [max(.1, 1 + (race_stats[p["driver_id"]]["Pride"] - 50) / 150
+                     - (race_stats[p["driver_id"]]["Reflexes"] - 50) / 200
+                     - (race_stats[p["driver_id"]]["Déjà vu"] - 50) / 250) for p in plans]
+        if rng.random() >= min(.9, sum(risks) / len(risks) / 3):
+            return
+        first = rng.choices(plans, weights=risks, k=1)[0]
+        lap = rng.randrange(LAPS)
+        before = first["splits"][lap - 1] if lap else 0
+        at = before + (first["splits"][lap] - before) * rng.uniform(.2, .8)
+
+        def progress(plan):
+            splits = plan["splits"]
+            laps = bisect.bisect_right(splits, at)
+            previous = splits[laps - 1] if laps else 0
+            return laps + (at - previous) / (splits[laps] - previous) if laps < LAPS else LAPS
+
+        order = sorted((p for p in plans if p["splits"][-1] > at),
+                       key=lambda p: (-progress(p), p["grid"]))
+        pending = [(first, False)]
+        checked = set()
+        while pending:
+            plan, secondary = pending.pop(0)
+            if plan["driver_id"] in checked:
+                continue
+            checked.add(plan["driver_id"])
+            stats = race_stats[plan["driver_id"]]
+            # Baseline: 60% minor, 25% major, 10% beyond, 5% recovery.
+            safety = (stats["Luck"] + stats["Reliability"] - 100) * .002
+            roll = rng.random()
+            if roll >= .95:
+                plan["events"].append({"at": at, "lap": lap + 1, "type": "crash-recovery",
+                                       "text": "avoids the crash and continues", "delta": 0})
+                continue
+            roll = min(.949999, max(0, roll - safety))
+            kind, missed = ("minor-crash", 0) if roll < .60 else (
+                ("major-crash", 2) if roll < .85 else ("beyond-crash", 3))
+            if secondary and kind == "minor-crash":
+                missed = 1
+            label = kind.replace("-", " ").title()
+            plan["retired_at"] = at
+            plan["missed_races"] = missed
+            plan["crash_type"] = kind
+            plan["events"] = [e for e in plan["events"] if e["at"] < at]
+            text = f"suffers a {label}; N/A Finish"
+            if missed:
+                text += f"; out for the next {missed} races"
+            if secondary:
+                text += " after being caught in the cascading crash"
+            plan["events"].append({"at": at, "lap": lap + 1, "type": kind, "text": text, "delta": 0})
+            if kind == "beyond-crash":
+                index = order.index(plan)
+                pending.extend((order[i], True) for i in (index - 1, index + 1) if 0 <= i < len(order))
+
     def _make_wave(self, season_number, season_slot):
         day, minute, race_count = SEASON_SCHEDULE[season_slot]
         rng = random.Random(self.seed + season_number * 1_000_003 + season_slot * 100_003)
@@ -483,7 +561,7 @@ class League:
                              for lane in range(race_count)]
         for lane, city in enumerate(cities):
             plans = []
-            for grid, driver_id in enumerate(driver_groups[lane]):
+            for grid, driver_id in enumerate(self._available_grid(driver_groups[lane], season_number, season_slot)):
                 driver = self.roster[driver_id]
                 plans.append({"driver_id": driver["id"], "grid": grid + 1, "splits": [], "events": [],
                               "total": 0.0, "pace_noise": rng.uniform(-1.6, 1.6)})
@@ -503,11 +581,10 @@ class League:
                     veil = stats["Veil"] / 100
                     acceleration = stats["Horsepower"] * (.70 + .25 * veil) + stats["Ghostpower"] * (.30 - .25 * veil)
 
-                    engine = stats["Smoke"] * .55 + stats["Pipes"] * .45
-                    reliability_weight = .18 * (10 - stats["Wheels"]) / 9
-                    top_speed = engine * (1 - reliability_weight) + stats["Reliability"] * reliability_weight
-                    if distance > 300:
-                        degradation = min(.08, (distance - 300) * .0004)
+                    smoke_weight = .55 + .02 * (stats["Wheels"] - 4)
+                    top_speed = stats["Smoke"] * smoke_weight + stats["Pipes"] * (1 - smoke_weight)
+                    if distance > 32:
+                        degradation = min(.08, (distance - 32) * .0004)
                         acceleration *= 1 - degradation * (100 - stats["Reliability"]) / 100
                         top_speed *= 1 - degradation * stats["Rust"] / 100
 
@@ -562,8 +639,8 @@ class League:
                         major = rng.random() < major_chance
                         delay = rng.uniform(6, 10) if major else rng.uniform(1.8, 4.5)
                         duration += delay
-                        effects.append({"text": "survives a major crash" if major else "spins and recovers",
-                                        "delta": round(delay, 1), "type": "major-crash" if major else "crash"})
+                        effects.append({"text": "Lost Major Control and recovers" if major else "Lost Control and recovers",
+                                        "delta": round(delay, 1), "type": "lost-major-control" if major else "lost-control"})
 
                     event(.02 + (100 - stats["Grip"]) * .0003,
                           .35 + stats["Hauntings"] * .006, .65 + stats["Hauntings"] * .012,
@@ -584,15 +661,17 @@ class League:
                     plan["total"] += duration
                     plan["splits"].append(round(plan["total"], 3))
 
+            self._crash_event(plans, race_stats, rng)
             for plan in plans:
                 del plan["total"]
                 del plan["pace_noise"]
             name = race_name(city["name"], season_slot, lane, season_number)
             data = {"city": city, "weather": rng.choice(WEATHER), "plans": plans}
-            winner = min(plans, key=lambda p: (p["splits"][-1], p["grid"]))["driver_id"]
+            finishers = [p for p in plans if "retired_at" not in p]
+            winner = min(finishers, key=lambda p: (p["splits"][-1], p["grid"]))["driver_id"] if finishers else None
             self.db.execute(
                 "INSERT OR IGNORE INTO races(wave,lane,start,end,city,name,data,winner,season,season_slot,season_race_number) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (wave, lane, start, start + max(p["splits"][-1] for p in plans), city["name"], name, json.dumps(data),
+                (wave, lane, start, start + max((p.get("retired_at", p["splits"][-1]) for p in plans), default=0), city["name"], name, json.dumps(data),
                  winner, season_number, season_slot, race_number(season_slot, lane)),
             )
 
@@ -618,7 +697,7 @@ class League:
             "season": season_number,
             "start": slot_start_timestamp(self.season_zero_date, season_number, season_slot),
             "city": city,
-            "racers": self._public_racers(driver_groups[lane], season_number) if driver_groups else [],
+            "racers": self._public_racers(self._available_grid(driver_groups[lane], season_number, season_slot, public=True), season_number) if driver_groups else [],
         } for lane, city in enumerate(cities)]
 
     def _next_waves(self, season_number, season_slot):
@@ -661,23 +740,31 @@ class League:
         standings = []
         for plan in data["plans"]:
             splits = plan["splits"]
-            laps = bisect.bisect_right(splits, elapsed)
+            retired = plan.get("retired_at", float("inf")) <= elapsed
+            driver_elapsed = min(elapsed, plan.get("retired_at", elapsed))
+            laps = bisect.bisect_right(splits, driver_elapsed)
             previous = splits[laps - 1] if laps else 0
-            fraction = (elapsed - previous) / (splits[laps] - previous) if laps < LAPS else 0
+            fraction = (driver_elapsed - previous) / (splits[laps] - previous) if laps < LAPS else 0
             progress = min(LAPS, laps + max(0, fraction))
             driver = self.roster[plan["driver_id"]]
             standings.append({"driver_id": driver["id"], "name": driver["name"], "number": driver["number"],
                               "car": driver["car"]["name"], "color": driver["color"], "grid": plan["grid"],
                               "team": self._driver_team(driver),
                               "laps": laps, "progress": round(progress, 5), "distance": round(progress * data["city"]["length"], 2),
-                              "finished": laps == LAPS, "finish_time": splits[-1] if laps == LAPS else None,
+                              "retired": retired, "crash_type": plan.get("crash_type") if retired else None,
+                              "missed_races": plan.get("missed_races", 0) if retired else 0,
+                              "finished": laps == LAPS and not retired, "finish_time": splits[-1] if laps == LAPS and not retired else None,
                               "last_lap": round(splits[laps - 1] - (splits[laps - 2] if laps > 1 else 0), 3) if laps else None})
-        standings.sort(key=lambda s: (0, s["finish_time"], s["grid"]) if s["finished"] else (1, -s["progress"], s["grid"]))
+        standings.sort(key=lambda s: (0, s["finish_time"], s["grid"]) if s["finished"] else (2 if s["retired"] else 1, -s["progress"], s["grid"]))
+        if not standings:
+            return []
         leader = standings[0]
         leader_plan = next(p for p in data["plans"] if p["driver_id"] == leader["driver_id"])
         for position, row in enumerate(standings, 1):
             row["position"] = position
-            if row["finished"]:
+            if row["retired"]:
+                row["gap"] = 0
+            elif row["finished"]:
                 row["gap"] = round(row["finish_time"] - leader["finish_time"], 2)
             else:
                 whole = min(9, int(row["progress"]))
@@ -688,7 +775,7 @@ class League:
 
     def _race(self, row, now, detail=True):
         data = json.loads(row["data"])
-        duration = max(plan["splits"][-1] for plan in data["plans"])
+        duration = max((plan.get("retired_at", plan["splits"][-1]) for plan in data["plans"]), default=0)
         # Use the original duration after completion: subtracting epoch floats
         # can otherwise leave the last driver a fraction short of the flag.
         elapsed = duration if row["completed"] else max(0, min(now - row["start"], duration))
@@ -710,9 +797,9 @@ class League:
                         delta = incident.get("delta", incident.get("delay", 0))
                         sign = "−" if delta < 0 else "+"
                         events.append({"at": incident["at"],
-                                       "text": f"{driver['name']} {incident['text']}. {sign}{abs(delta):.1f}s.",
+                                       "text": f"{driver['name']} {incident['text']}." + (f" {sign}{abs(delta):.1f}s." if delta else ""),
                                        "type": incident.get("type", "paranormal")})
-                if plan["splits"][-1] <= elapsed:
+                if "retired_at" not in plan and plan["splits"][-1] <= elapsed:
                     pos = next(s["position"] for s in standings if s["driver_id"] == driver["id"])
                     events.append({"at": plan["splits"][-1], "text": f"{driver['name']} takes the flag in P{pos}.", "type": "finish"})
             result["events"] = sorted(events, key=lambda e: e["at"], reverse=True)[:20]
@@ -759,7 +846,7 @@ class League:
                 "SELECT * FROM races WHERE completed=1 AND season_slot=? ORDER BY season DESC LIMIT 1",
                 (CHAMPIONSHIP_FINAL_SLOT,),
             ).fetchone()
-            if row is None:
+            if row is None or row["winner"] is None:
                 season_number = season_number_for(self.season_zero_date, now)
                 result = {"winner": None, "season": {"number": season_number, "name": season_name(season_number)}}
             else:
@@ -820,6 +907,11 @@ class League:
         with self.lock, self.db:
             if self.db.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
                 return False
+            self.db.execute(
+                "INSERT OR IGNORE INTO meta(key,value) VALUES ('pit_crew_stat_baseline',?)",
+                (json.dumps({driver_id: stat_map(driver, effective=False)
+                             for driver_id, driver in self.roster.items()}),),
+            )
             changed = set()
 
             def stat(driver, name):
@@ -954,9 +1046,9 @@ class League:
                     "number": row["season"],
                     "name": season_name(row["season"]),
                     "start_date": season_start_date(self.season_zero_date, row["season"]).isoformat(),
-                    "winner": {key: records[finishers[0]][key] for key in ("id", "name", "number", "color")},
-                    "second": {key: records[finishers[1]][key] for key in ("id", "name", "number", "color")},
-                    "third": {key: records[finishers[2]][key] for key in ("id", "name", "number", "color")},
+                    "winner": {key: records[finishers[0]][key] for key in ("id", "name", "number", "color")} if len(finishers) > 0 else None,
+                    "second": {key: records[finishers[1]][key] for key in ("id", "name", "number", "color")} if len(finishers) > 1 else None,
+                    "third": {key: records[finishers[2]][key] for key in ("id", "name", "number", "color")} if len(finishers) > 2 else None,
                     "team_champion": self.teams(row["season"])[0],
                 })
 
@@ -1003,6 +1095,51 @@ class League:
             team_records.sort(key=lambda team: (-team["championship_wins"], team["name"]))
             return {"teams": team_records, "drivers": drivers, "seasons": seasons}
 
+    def _pit_effect_history(self):
+        """Describe applied draws, including the other drivers they affected."""
+        draws = sorted(
+            [(int(row["key"].split(":")[1]), json.loads(row["value"]))
+             for row in self.db.execute("SELECT key,value FROM meta WHERE key LIKE 'pit_crew_effects:%'")],
+            key=lambda item: item[0],
+        )
+        teams = {driver_id: driver["team_id"] for driver_id, driver in self.roster.items()}
+
+        def swap_partner(season, driver_id):
+            alternatives = [other_id for other_id in self.roster if other_id != driver_id]
+            return random.Random(f"{season}:double-agent:{driver_id}").choice(alternatives) if alternatives else None
+
+        # Undo only team affiliations in this local map to identify teammates
+        # at the time of each draw. Never replay effects on the real roster.
+        for season, outcomes in reversed(draws):
+            for outcome in reversed(outcomes):
+                first = outcome.get("target_a")
+                if outcome.get("action") == "double-agent" and first in teams:
+                    other = swap_partner(season, first)
+                    if other is not None:
+                        teams[first], teams[other] = teams[other], teams[first]
+
+        history = {driver_id: [] for driver_id in self.roster}
+        for season, outcomes in draws:
+            for outcome in outcomes:
+                action = outcome.get("action")
+                first, second = outcome.get("target_a"), outcome.get("target_b")
+                if first not in history:
+                    continue
+                affected = {first}
+                if action in ("car-swap", "soul-swap") and second in history:
+                    affected.add(second)
+                elif action == "double-agent":
+                    other = swap_partner(season, first)
+                    if other is not None:
+                        affected.add(other)
+                        teams[first], teams[other] = teams[other], teams[first]
+                elif action == "golden-child":
+                    affected.update(driver_id for driver_id in teams if teams[driver_id] == teams[first])
+                for driver_id in affected:
+                    history[driver_id].append({"season": season, "season_name": season_name(season),
+                                               "action": action})
+        return {driver_id: list(reversed(entries)) for driver_id, entries in history.items()}
+
     def drivers(self, season=None):
         with self.lock:
             self.tick()
@@ -1018,14 +1155,36 @@ class League:
             rows = self.db.execute("SELECT * FROM races WHERE completed=1 ORDER BY start DESC,id DESC").fetchall()
             for row in rows:
                 data = json.loads(row["data"])
-                duration = max(plan["splits"][-1] for plan in data["plans"])
+                duration = max((plan.get("retired_at", plan["splits"][-1]) for plan in data["plans"]), default=0)
                 for standing in self._standings(data, duration):
                     history = performances[standing["driver_id"]]
                     if len(history) < 10:
                         history.append({"race_number": row["season_race_number"], "season": row["season"],
-                                        "location": data["city"]["name"], "place": standing["position"]})
-            return [{**d, "team": self._driver_team(d), "wins": wins.get(d["id"], 0), "starts": starts.get(d["id"], 0),
-                     "info": {"favorite_animal": DRIVER_INFO[d["name"]][0], "political_leanings": DRIVER_INFO[d["name"]][1]},
+                                        "location": data["city"]["name"], "place": "N/A" if standing["retired"] else standing["position"]})
+            baseline_row = self.db.execute("SELECT value FROM meta WHERE key='pit_crew_stat_baseline'").fetchone()
+            baselines = json.loads(baseline_row[0]) if baseline_row else {}
+            effect_history = self._pit_effect_history()
+
+            def displayed_driver(driver):
+                effective = stat_map(driver)
+                original = baselines.get(str(driver["id"]), stat_map(driver, effective=False))
+
+                def groups(attributes, car=False):
+                    return [{**group, "value": attribute_value([
+                        {"name": stat["name"], "value": effective[stat["name"]]}
+                        for stat in group["stats"]]), "stats": [
+                        {**stat, "original_value": stat["value"] if car or stat["name"] in ("Reflexes", "Pride", "Focus") else original[stat["name"]],
+                         "effective_value": effective[stat["name"]]}
+                        for stat in group["stats"]]} for group in attributes]
+
+                return {**driver, "attributes": groups(driver["attributes"]),
+                        # A swapped car brings its own base stats. Only its
+                        # modifiers produce adjustments in the dossier.
+                        "car": {**driver["car"], "attributes": groups(driver["car"]["attributes"], car=True)}}
+
+            return [{**displayed_driver(d), "team": self._driver_team(d), "wins": wins.get(d["id"], 0), "starts": starts.get(d["id"], 0),
+                     "info": {"favorite_animal": DRIVER_INFO[d["name"]][0], "political_leanings": DRIVER_INFO[d["name"]][1],
+                              "effects": effect_history[d["id"]]},
                      "performances": performances[d["id"]]} for d in self.roster.values()]
 
     def teams(self, season=None, sponsor_counts=None):
@@ -1123,7 +1282,7 @@ class League:
             results = []
             for row in rows:
                 data = json.loads(row["data"])
-                standings = self._standings(data, max(plan["splits"][-1] for plan in data["plans"]))
+                standings = self._standings(data, max((plan.get("retired_at", plan["splits"][-1]) for plan in data["plans"]), default=0))
                 prior = self.db.execute(
                     "SELECT 1 FROM races WHERE completed=1 AND season=? AND winner=? AND (start<? OR (start=? AND id<?)) LIMIT 1",
                     (row["season"], row["winner"], row["start"], row["start"], row["id"]),
@@ -1131,8 +1290,8 @@ class League:
                 results.append({"id": row["id"], "season": row["season"],
                                 "race_number": row["season_race_number"],
                                 "standings": standings, "plans": data["plans"],
-                                "duration": max(plan["splits"][-1] for plan in data["plans"]),
-                                "first_season_win": prior is None})
+                                "duration": max((plan.get("retired_at", plan["splits"][-1]) for plan in data["plans"]), default=0),
+                                "first_season_win": row["winner"] is not None and prior is None})
             return results
 
     def completed_bet_races(self):
@@ -1143,7 +1302,7 @@ class League:
             for row in self.db.execute("SELECT id,season,season_race_number AS race_number,winner,data FROM races WHERE completed=1 ORDER BY id"):
                 data = json.loads(row["data"])
                 crashed = [plan["driver_id"] for plan in data["plans"]
-                            if any(event.get("type") in ("crash", "major-crash") for event in plan.get("events", []))]
+                            if any(event.get("type") in ("crash", "minor-crash", "major-crash", "beyond-crash") for event in plan.get("events", []))]
                 races.append({"season": row["season"], "race_number": row["race_number"],
                               "winner": row["winner"], "crashed_drivers": crashed})
             return races

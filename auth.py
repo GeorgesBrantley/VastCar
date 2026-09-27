@@ -50,7 +50,7 @@ MAX_STACK_SIZE = 10
 ACTIVE_SLOT_LIMIT = 3
 STASH_SLOT_LIMIT = 5
 STACK_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,64}\Z")
-FINAL_LAP_CHOICES = ("weather", "advertising", "explosions")
+FINAL_LAP_CHOICES = ("weather", "advertising", "balance")
 PIT_CREW_ACTIONS = {
     "car-swap": 2,
     "haunting": 1,
@@ -172,6 +172,12 @@ class LocalAuth:
                     season INTEGER PRIMARY KEY,
                     result TEXT NOT NULL,
                     finalized_at INTEGER NOT NULL
+                )
+            """)
+            self.db.execute("""
+                CREATE TABLE IF NOT EXISTS pit_crew_ballots (
+                    season INTEGER PRIMARY KEY,
+                    actions TEXT NOT NULL
                 )
             """)
             self._migrate_bets()
@@ -336,6 +342,20 @@ class LocalAuth:
                 raise AuthError("Your amendment vote is already locked in") from error
         return self.final_lap_poll(season, user_id)
 
+    def pit_crew_options(self, season):
+        """Keep one random set of five actions shared by the entire election."""
+        with self.lock, self.db:
+            row = self.db.execute("SELECT actions FROM pit_crew_ballots WHERE season=?", (season,)).fetchone()
+            if row:
+                return json.loads(row["actions"])
+            actions = secrets.SystemRandom().sample(list(PIT_CREW_ACTIONS), 5)
+            self.db.execute(
+                "INSERT OR IGNORE INTO pit_crew_ballots(season,actions) VALUES (?,?)",
+                (season, json.dumps(actions)),
+            )
+            row = self.db.execute("SELECT actions FROM pit_crew_ballots WHERE season=?", (season,)).fetchone()
+            return json.loads(row["actions"])
+
     def buy_pit_crew_ticket(self, user_id, season, action, target_a, target_b=None, quantity=1):
         selections = PIT_CREW_ACTIONS.get(action)
         if (type(season) is not int or selections is None or type(target_a) is not int
@@ -348,6 +368,8 @@ class LocalAuth:
         elif target_b is not None:
             raise AuthError("That pit crew change only needs one driver")
         with self.lock, self.db:
+            if action not in self.pit_crew_options(season):
+                raise AuthError("That pit crew change is not on this election’s ballot")
             user = self.db.execute("SELECT coin FROM users WHERE id=?", (user_id,)).fetchone()
             if user is None:
                 raise AuthError("Your session has expired")
@@ -377,7 +399,7 @@ class LocalAuth:
             return json.loads(row["result"]) if row else None
 
     def finalize_election(self, season):
-        """Draw at most ten unique weighted pit changes and freeze all results."""
+        """Draw one ticket per available action and freeze all results."""
         with self.lock, self.db:
             existing = self.db.execute("SELECT result FROM final_lap_results WHERE season=?", (season,)).fetchone()
             if existing:
@@ -386,17 +408,12 @@ class LocalAuth:
             tickets = [dict(row) for row in self.db.execute(
                 "SELECT id,action,target_a,target_b FROM pit_crew_tickets WHERE season=? ORDER BY id", (season,)
             )]
-            secrets.SystemRandom().shuffle(tickets)
             outcomes = []
-            seen = set()
-            for ticket in tickets:
-                key = (ticket["action"], ticket["target_a"], ticket["target_b"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                outcomes.append({key: ticket[key] for key in ("action", "target_a", "target_b")})
-                if len(outcomes) == 10:
-                    break
+            for action in self.pit_crew_options(season):
+                entries = [ticket for ticket in tickets if ticket["action"] == action]
+                if entries:
+                    ticket = secrets.choice(entries)
+                    outcomes.append({key: ticket[key] for key in ("action", "target_a", "target_b")})
             result = {"amendments": amendments["totals"], "pit_crew": outcomes}
             self.db.execute(
                 "INSERT INTO final_lap_results(season,result,finalized_at) VALUES (?,?,?)",
@@ -492,19 +509,19 @@ class LocalAuth:
                     standings = race["standings"]
                     favorite = next((entry for entry in standings if entry["driver_id"] == user["fav_racer"]), None)
                     rewards = []
-                    if favorite and favorite["position"] == 1:
+                    if favorite and favorite.get("finished", True) and favorite["position"] == 1:
                         rewards.append(("binoculars", active["binoculars"] * 10))
-                    if favorite and favorite["position"] >= len(standings) - 2:
+                    if favorite and favorite.get("finished", True) and favorite["position"] >= len(standings) - 2:
                         rewards.append(("beer", active["beer"] * 5))
-                    if favorite and favorite["position"] <= 3:
+                    if favorite and favorite.get("finished", True) and favorite["position"] <= 3:
                         rewards.append(("whistle", active["whistle"] * 5))
-                    crashes = sum(incident.get("type") in ("crash", "major-crash") for plan in race["plans"] for incident in plan.get("events", []))
+                    crashes = sum(incident.get("type") in ("crash", "minor-crash", "major-crash", "beyond-crash") for plan in race["plans"] for incident in plan.get("events", []))
                     rewards.append(("camera", active["camera"] * crashes * 10))
                     if race["first_season_win"]:
                         rewards.append(("old-scroll", active["old-scroll"] * 10))
                     if race["duration"] > 8 * 60:
                         rewards.append(("watch", active["watch"] * 200))
-                    winner = next((entry for entry in standings if entry["position"] == 1), None)
+                    winner = next((entry for entry in standings if entry["position"] == 1 and entry.get("finished", True)), None)
                     if winner and winner.get("team", {}).get("id") == user["sponsored_team"]:
                         rewards.append(("team-flag", active["team-flag"] * 20))
                     if winner and winner.get("finish_time", race["duration"]) < 7 * 60:

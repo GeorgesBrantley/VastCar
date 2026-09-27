@@ -115,17 +115,21 @@ with separate acceleration and top-speed scores rather than one overall rating:
 v = Veil / 100
 acceleration = Horsepower × (0.70 + 0.25v) + Ghostpower × (0.30 − 0.25v)
 
-engine = 0.55 × Smoke + 0.45 × Pipes
-reliability weight = 0.18 × (10 − Wheels) / 9
-top speed = engine × (1 − reliability weight)
-            + Reliability × reliability weight
+Smoke weight = 0.55 + 0.02 × (Wheels − 4)
+top speed = Smoke × Smoke weight + Pipes × (1 − Smoke weight)
 ```
 
 Horsepower is always the larger acceleration influence, while Veil changes how
-much room Ghostpower has. Fewer Wheels make Reliability more important to final
-top speed; more Wheels let Engine output dominate. After 300 km, poor
-Reliability gradually reduces effective acceleration and Rust gradually reduces
-effective top speed, capped at an 8% degradation factor.
+much room Ghostpower has. Four Wheels give top speed a 55% Smoke / 45% Pipes
+balance. Each extra Wheel shifts two percentage points toward Smoke; each fewer
+Wheel shifts two toward Pipes. Reliability has no effect on top speed. After
+32 km completed, poor Reliability gradually reduces effective acceleration and
+Rust gradually reduces effective top speed. At the start of each lap, the
+degradation factor is `min(0.08, (distance − 32) × 0.0004)` for distances above
+32 km, and zero otherwise. Acceleration is multiplied by
+`1 − degradation × (100 − Reliability) / 100`; top speed by
+`1 − degradation × Rust / 100`. Current 37–60 km races experience wear in their
+later laps; the degradation factor is capped at 8%.
 
 Each track has a **Curves/Straightaways** profile. Most tracks sit near the
 middle, while a few lean clearly toward long straights or tight cornering. Curvy
@@ -154,12 +158,14 @@ Each lap is then calculated as:
 lap time = clamp(baseline + U(−3, 3) + sum(event effects), 30, 60)
 ```
 
-There is no longer a flat incident chance. Each boost, crash, slip, draft, or
+There is no longer a flat incident chance. Each boost, control loss, slip, draft, or
 paranormal event has its own stat-driven probability and signed time effect;
 the exact rules are listed in [`EVENTS.md`](EVENTS.md). Luck changes favorable
 and harmful event odds by at most 10% in either direction. Race time is the sum
-of ten laps, and the lowest total wins (with earlier grid position breaking an
+of ten laps, and the lowest total among finishers wins (with earlier grid position breaking an
 exact tie). Weather is selected and displayed but has no mechanical effect.
+
+Crash events are separate from control loss: roughly one-third of baseline races has a crash trigger. Luck + Reliability give baseline outcomes of 60% Minor Crash (N/A Finish), 25% Major Crash (two following races missed), 10% Beyond Crash (three missed, with cascading checks on adjacent racers), and 5% recovery. Secondary Minor Crashes miss one following race. See [`EVENTS.md`](EVENTS.md) for recovery and cascade rules.
 
 ## Stat design notes
 
@@ -179,9 +185,9 @@ These are scaled, so a 0 to 100 may look like a lot, but it just may be the diff
 - **Mechanical notes:** Controls crash avoidance and the leader's situational risk.
 - **Flavor notes:** How quickly a driver understands what the circuit is doing to them.
 - **Substats:**
-  - **Reflexes:** High Reflexes decrease crash chances. Implemented as a small reduction to each lap's crash roll.
-  - **Pride:** Higher Pride is bad. When leading, it increases the chance and size of an overdriving mistake.
-  - **Déjà vu:** High DV decreases crash chance and the chance of a BAD crash. It affects both rolls separately.
+  - **Reflexes:** High Reflexes decrease crash chances. Implemented as a small reduction to each lap's control-loss roll and the separate race crash risk.
+  - **Pride:** Higher Pride is bad. When leading, it increases the chance and size of an overdriving mistake. It also increases crash-event risk.
+  - **Déjà vu:** High DV decreases control-loss chance and severity, and reduces separate crash-event risk.
 
 #### Nerve
 
@@ -189,7 +195,7 @@ These are scaled, so a 0 to 100 may look like a lot, but it just may be the diff
 - **Flavor notes:** What a driver does when a sensible person would lift off the throttle.
 - **Substats:**
   - **Focus:** Slight increase to acceleration when in first. It also provides a modest, reduced trigger for drafting when a car is close enough.
-  - **Audacity:** High Audacity gives a slight Top Speed bonus, but increases crash chance. The bonus is an occasional overdrive event; the risk is applied on every crash roll.
+  - **Audacity:** High Audacity gives a slight Top Speed bonus, but increases control-loss chance. The bonus is an occasional overdrive event; the risk is applied on every control-loss roll.
   - **Dread tolerance:** Low Dread Tolerance means a driver hates being in last place. Lower values increase both the chance and size of a last-place boost.
 
 #### Resonance
@@ -230,25 +236,25 @@ The basics of the math is making Top Speed and Acceleration intersting. We do th
 - **Mechanical notes:** These values contribute to top speed. We should weight them based on Wheels.
 - **Flavor notes:** Two imperfect measures of what comes out of the back of the machine.
 - **Substats:**
-  - **Smoke:** The larger Top Speed factor, weighted at 55% of raw Engine output.
-  - **Pipes:** The second Top Speed factor, weighted at 45% of raw Engine output.
+  - **Smoke:** Weighted at 55% of Top Speed with four Wheels; each extra Wheel adds two percentage points, and each fewer Wheel subtracts two.
+  - **Pipes:** Weighted at 45% of Top Speed with four Wheels; its weight is the remainder after Smoke, so fewer Wheels favor Pipes.
 
 
 #### Frame
 
-- **Mechanical notes:** These values govern longer races. Their gradual effects begin after 300 km and grow by distance, with a small hard cap.
+- **Mechanical notes:** These values govern longer races. Their gradual effects begin after 32 km and grow by distance, with a small hard cap.
 - **Flavor notes:** What remains after the quick parts have been quick for too long.
 - **Substats:**
-  - **Reliability:** Higher Reliability keeps Force-derived acceleration effective after 300 km. It also contributes modestly to final Top Speed when a car has fewer Wheels.
-  - **Rust:** Higher Rust causes more Engine-derived Top Speed loss after 300 km. It has no effect before that threshold.
+  - **Reliability:** Higher Reliability keeps Force-derived acceleration effective after 32 km. It only affects acceleration through long-distance wear and never contributes to Top Speed.
+  - **Rust:** Higher Rust causes more Engine-derived Top Speed loss after 32 km. It has no effect before that threshold.
 
 #### Anomaly
 
-- **Mechanical notes:** Defines the boundary between acceleration regimes and how much the Frame stabilizes final Top Speed.
+- **Mechanical notes:** Defines the balance between acceleration inputs and between Smoke and Pipes for Top Speed.
 - **Flavor notes:** The vehicle's geometry, including the parts that may only be metaphorically circular.
 - **Substats:**
   - **Veil:** The higher the number, the more Horsepower matters; the lower the number, the more Ghostpower matters. Its linear blend splits acceleration behavior without allowing Ghostpower to become the larger factor.
-  - **Wheels:** A raw value between 1 and 10, usually 4. Fewer Wheels make Reliability count more toward final Top Speed; more Wheels let Engine output count more directly.
+  - **Wheels:** A raw value between 1 and 10, usually 4. Four Wheels give 55% Smoke / 45% Pipes for Top Speed. Each extra Wheel shifts two percentage points toward Smoke; each fewer Wheel shifts two toward Pipes.
 
 ## Pages
 

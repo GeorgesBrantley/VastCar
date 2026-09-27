@@ -40,7 +40,7 @@
 .modifier-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.modifier-box{display:inline-flex;align-items:center;min-height:25px;padding:5px 8px;border:1px solid var(--driver-color);border-radius:2px;background:#53e6ff0a;color:var(--text);font:8px var(--mono);letter-spacing:.7px;text-transform:uppercase;cursor:help}.modifier-box:hover,.modifier-box:focus-visible{background:#53e6ff18;color:var(--driver-color);outline:1px solid var(--driver-color);outline-offset:2px}
 .event.boost,.event.draft{border-color:var(--lime)}
 .event.paranormal{border-color:var(--orange)}
-.event.crash,.event.major-crash,.event.slip{border-color:#ff6f76}
+.event.crash,.event.minor-crash,.event.major-crash,.event.beyond-crash,.event.lost-control,.event.lost-major-control,.event.slip{border-color:#ff6f76}
 
 /* Keep the car number visible as its own timing reference column. */
 .standings-head,.standing{grid-template-columns:25px 28px 1fr 48px 47px}
@@ -221,3 +221,26 @@ html{overflow-x:hidden}.dialog-open{overflow:hidden}.mobile-nav-toggle{display:n
 
 /* Keep marker motion continuous across ordinary remote polling latency. */
 .track-marker{transition-duration:1.15s}
+
+/* Driver dossier: original stat with an adjustment extending from its endpoint. */
+.stat-column>.modifier-list{margin:0 0 17px}
+.driver-dossier .stat-row{grid-template-columns:minmax(0,1fr) minmax(65px,100px) 66px;gap:8px}
+.driver-dossier .stat-bar{position:relative;height:6px}
+.driver-dossier .stat-bar>i{position:absolute;left:0;top:0}
+.driver-dossier .stat-bar>.stat-change{opacity:1;transform-origin:left;animation:stat-adjustment .35s ease-out}
+.driver-dossier .stat-bar>.stat-change.decrease{background:#ff657a;transform-origin:right}
+.driver-dossier .stat-bar>.stat-change.increase{background:#65df98}
+.driver-dossier .stat-bar>.stat-original-marker{width:2px;height:10px;top:-2px;background:var(--text);opacity:1;transform:translateX(-1px)}
+.stat-values{display:flex;justify-content:flex-end;gap:4px;white-space:nowrap}
+.stat-original{color:var(--muted)}
+.stat-effective.increase{color:#65df98}.stat-effective.decrease{color:#ff657a}
+@keyframes stat-adjustment{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@media(prefers-reduced-motion:reduce){.driver-dossier .stat-bar>.stat-change{animation:none}}
+
+.driver-info>.driver-effect-history{grid-column:1/-1;padding:20px;border-top:1px solid var(--border)}
+.driver-effect-history h3{margin:0 0 16px;color:var(--muted);font:10px var(--mono);letter-spacing:1px}
+.driver-effect-history ol{list-style:none;padding:0;margin:0}
+.driver-effect-history li{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:12px 0;border-top:1px solid var(--border)}
+.driver-effect-history li span{font:10px var(--mono);line-height:1.6}
+.driver-effect-history li b{margin:0;font:12px var(--sans);color:var(--text)}
+.driver-effect-history p{color:var(--muted);font-size:12px;margin:0}

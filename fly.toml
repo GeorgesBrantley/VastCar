@@ -26,7 +26,7 @@ primary_region = "ord"
   snapshot_retention = 14
 
 [[vm]]
-  size = "dedicated-cpu-1x"
+  size = "performance-1x"
 
 [[restart]]
   policy = "always"
